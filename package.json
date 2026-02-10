@@ -1,0 +1,30 @@
+{
+  "name": "anti-bullying-support-app",
+  "version": "1.0.0",
+  "description": "A comprehensive support platform for children affected by bullying",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run mobile:dev\" \"npm run backend:dev\"",
+    "mobile:dev": "cd mobile && npm start",
+    "backend:dev": "cd backend && python -m uvicorn main:app --reload --host 0.0.0.0 --port 8001",
+    "mobile:install": "cd mobile && npm install",
+    "backend:install": "cd backend && pip install -r requirements.txt",
+    "setup": "npm run mobile:install && npm run backend:install",
+    "mobile:build": "cd mobile && expo build",
+    "backend:test": "cd backend && python -m pytest",
+    "docs": "echo 'API docs available at http://localhost:8001/docs when backend is running'"
+  },
+  "keywords": [
+    "anti-bullying",
+    "mental-health",
+    "children",
+    "support",
+    "react-native",
+    "fastapi"
+  ],
+  "author": "Anti-Bullying Support Team",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
