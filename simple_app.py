@@ -4,16 +4,26 @@ Simple Anti-Bullying Support App - Web Version
 Run this file and it works immediately.
 """
 
-from flask import Flask, render_template_string, request, jsonify, send_from_directory
+from flask import Flask, render_template_string, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
+from werkzeug.security import generate_password_hash, check_password_hash
 import random
 from datetime import datetime
 import os
+import json
 from dotenv import load_dotenv
 from openai import OpenAI
 
 load_dotenv()
 
 app = Flask(__name__, static_folder='static')
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-change-in-production')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///buddy.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db = SQLAlchemy(app)
+login_manager = LoginManager(app)
 
 # OpenAI client
 client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
@@ -256,23 +266,69 @@ REMEMBER: You are possibly the only safe space this child has right now. Be wort
 # Conversation history per session (in-memory)
 conversation_history = []
 
-@app.route('/static/<path:filename>')
-def serve_static(filename):
-    return send_from_directory(app.static_folder, filename)
-
-# Mock data
+# In-memory data (fallback for non-logged-in users)
 mood_entries = []
 reports = []
 chat_history = []
 
-# AI responses
-supportive_responses = [
-    "Thank you for sharing that with me. Your feelings are completely valid. 💙",
-    "I hear you, and I want you to know that you're not alone in this. 🤗",
-    "It takes courage to talk about difficult experiences. I'm proud of you. ✨",
-    "That sounds really tough. How are you feeling right now? 💜",
-    "You're being so brave by reaching out for support. 💪"
-]
+# --- Database Models ---
+
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(256), nullable=False)
+    parent_email = db.Column(db.String(120), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class MoodEntry(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    mood = db.Column(db.String(50), nullable=False)
+    note = db.Column(db.Text, nullable=True)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+class ChatMessage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    role = db.Column(db.String(10), nullable=False)  # 'user' or 'ai'
+    content = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+class Report(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    report_text = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+class KindnessEntry(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    entry_text = db.Column(db.Text, nullable=False)
+    ai_response = db.Column(db.Text, nullable=True)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+class TrustTeamMember(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    relationship = db.Column(db.String(100), nullable=False)
+    contact = db.Column(db.String(200), nullable=True)
+    emoji = db.Column(db.String(10), nullable=True)
+
+class UserProgress(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), unique=True, nullable=False)
+    xp = db.Column(db.Integer, default=0)
+    level = db.Column(db.Integer, default=1)
+    badges_json = db.Column(db.Text, default='[]')
+    kindness_count = db.Column(db.Integer, default=0)
+    courage_practiced = db.Column(db.Integer, default=0)
+    last_synced = db.Column(db.DateTime, default=datetime.utcnow)
+
+@login_manager.user_loader
+def load_user(user_id):
+    return db.session.get(User, int(user_id))
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -288,7 +344,7 @@ HTML_TEMPLATE = """
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Nunito', 'Comic Sans MS', cursive, sans-serif;
-            background: linear-gradient(180deg, #4ECDC4 0%, #44CF6C 25%, #FFE66D 50%, #FF6B6B 75%, #C44569 100%);
+            background: linear-gradient(180deg, #8DD8D3 0%, #9DD4A8 25%, #F5E4A8 50%, #F5B8B8 75%, #D4A0B8 100%);
             background-attachment: fixed;
             min-height: 100vh;
             color: #2D3436;
@@ -313,7 +369,7 @@ HTML_TEMPLATE = """
             z-index: 0;
         }
 
-        .container { max-width: 1200px; margin: 0 auto; padding: 20px; position: relative; z-index: 1; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; position: relative; z-index: 1; }
 
         /* Confetti Canvas */
         #confetti-canvas {
@@ -326,6 +382,37 @@ HTML_TEMPLATE = """
             z-index: 9999;
         }
 
+        .heart-video-wrapper {
+            position: fixed;
+            bottom: 25px;
+            left: 20px;
+            width: 160px;
+            height: 200px;
+            z-index: 900;
+            cursor: pointer;
+            animation: heartFloat 3s ease-in-out infinite;
+            overflow: hidden;
+            border-radius: 50% 50% 45% 45% / 40% 40% 55% 55%;
+            border: 3px solid rgba(255, 107, 107, 0.5);
+            box-shadow: 0 8px 25px rgba(255, 107, 107, 0.3);
+        }
+        .heart-video-wrapper video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .heart-video-wrapper:hover {
+            transform: scale(1.08);
+        }
+        .heart-video-right {
+            left: auto;
+            right: 20px;
+            animation-delay: 1.5s;
+        }
+        @keyframes heartFloat {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-8px); }
+        }
         .help-icon {
             position: fixed;
             top: 20px;
@@ -385,15 +472,15 @@ HTML_TEMPLATE = """
         .header {
             text-align: center;
             margin-bottom: 40px;
-            background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(255,255,255,0.85));
-            padding: 25px 40px;
-            border-radius: 30px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-            border: 4px solid white;
+            background: rgba(255,255,255,0.45);
+            padding: 25px 20px 25px 40px;
+            border-radius: 24px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.04);
+            border: 1px solid rgba(255,255,255,0.6);
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            gap: 30px;
+            gap: 20px;
+            position: relative;
         }
         .header-buddy-img {
             width: 100px;
@@ -434,42 +521,116 @@ HTML_TEMPLATE = """
         }
         .header p { font-size: 1.3em; color: #636E72; font-weight: 700; margin: 0; }
 
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; }
-
-        /* Card ordering for optimal layout */
-        .card-order-1 { order: 1; }   /* Your Journey - TOP */
-        .card-order-2 { order: 2; }   /* Mood Tracker */
-        .card-order-3 { order: 3; }   /* Chat with Buddy */
-        .card-order-4 { order: 4; }   /* Tell Someone */
-        .card-order-5 { order: 5; }   /* Trust Team (next to Tell Someone) */
-        .card-order-6 { order: 6; }   /* Kindness Journal */
-        .card-order-7 { order: 7; }   /* What Should I Do */
-        .card-order-8 { order: 8; }   /* Confidence Boosters */
-        .card-order-9 { order: 9; }   /* Courage Builder */
-        .card-order-10 { order: 10; } /* Practice Pod */
-        .card-order-11 { order: 11; } /* My Progress */
-        .card-order-12 { order: 12; } /* Learn & Grow (BOTTOM) */
-        .card-order-13 { order: 13; } /* Quick Lessons (BOTTOM) */
-
-        .card {
-            background: linear-gradient(145deg, #FFFFFF, #F8F9FF);
-            border-radius: 25px;
-            padding: 18px;
-            box-shadow: 0 12px 30px rgba(0,0,0,0.1);
-            transition: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+        /* Sidebar Navigation */
+        .sidebar-toggle {
+            display: none;
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            background: linear-gradient(135deg, #6C5CE7, #A29BFE);
+            color: white;
             border: 4px solid white;
+            border-radius: 50px;
+            padding: 12px 30px;
+            font-size: 18px;
+            font-weight: 800;
+            font-family: 'Nunito', sans-serif;
+            cursor: pointer;
+            box-shadow: 0 8px 30px rgba(108, 92, 231, 0.5);
+            gap: 10px;
+            align-items: center;
+        }
+        .app-layout {
+            display: flex;
+            gap: 20px;
+            align-items: flex-start;
+            min-height: calc(100vh - 200px);
+            background: transparent;
+            border-radius: 0;
+            padding: 0;
+        }
+        .sidebar {
+            width: 240px;
+            min-width: 240px;
+            background: rgba(255,255,255,0.4);
+            border-radius: 24px;
+            padding: 15px 10px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.04);
+            border: 1px solid rgba(255,255,255,0.5);
+            position: sticky;
+            top: 20px;
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: #A29BFE #E0E7FF;
+        }
+        .sidebar::-webkit-scrollbar { width: 6px; }
+        .sidebar::-webkit-scrollbar-track { background: #E0E7FF; border-radius: 3px; }
+        .sidebar::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #A29BFE, #6C5CE7); border-radius: 3px; }
+        .sidebar-group {
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 2px dashed rgba(108, 92, 231, 0.15);
+        }
+        .sidebar-group:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+        .sidebar-group-label {
+            font-size: 0.7em;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: #A29BFE;
+            padding: 4px 12px;
+            margin-bottom: 4px;
+        }
+        .sidebar-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            padding: 10px 12px;
+            border: 3px solid transparent;
+            border-radius: 15px;
+            background: transparent;
+            cursor: pointer;
+            font-family: 'Nunito', sans-serif;
+            font-size: 0.85em;
+            font-weight: 700;
+            color: #2D3436;
+            transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            text-align: left;
+        }
+        .sidebar-item:hover {
+            background: linear-gradient(135deg, #E0E7FF, #C7D2FE);
+            border-color: #A29BFE;
+            transform: translateX(4px);
+        }
+        .sidebar-item.active {
+            background: linear-gradient(135deg, #6C5CE7, #A29BFE);
+            color: white;
+            border-color: white;
+            box-shadow: 0 5px 20px rgba(108, 92, 231, 0.4);
+            transform: scale(1.02);
+        }
+        .sidebar-emoji { font-size: 1.4em; width: 30px; text-align: center; flex-shrink: 0; }
+        .sidebar-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+        .main-content { flex: 1; min-width: 0; }
+
+        .section-panel {
+            display: none;
+            background: rgba(255,255,255,0.4);
+            border-radius: 24px;
+            padding: 25px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.04);
+            border: 1px solid rgba(255,255,255,0.5);
             position: relative;
             overflow: hidden;
-            max-height: 480px;
-            overflow-y: auto;
+            animation: sectionFadeIn 0.35s ease-out;
+            min-height: calc(100vh - 200px);
         }
-        @media (max-height: 900px) {
-            .card { max-height: 420px; }
-        }
-        @media (max-height: 768px) {
-            .card { max-height: 380px; }
-        }
-        .card::before {
+        .section-panel::before {
             content: '';
             position: absolute;
             top: 0;
@@ -479,9 +640,46 @@ HTML_TEMPLATE = """
             background: linear-gradient(90deg, #FF6B6B, #FFE66D, #4ECDC4, #6C5CE7);
             border-radius: 25px 25px 0 0;
         }
-        .card:hover {
-            transform: translateY(-8px) scale(1.01);
-            box-shadow: 0 20px 45px rgba(0,0,0,0.12);
+        .section-panel.section-active { display: block; }
+        @keyframes sectionFadeIn {
+            0% { opacity: 0; transform: translateY(15px) scale(0.98); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.4);
+            backdrop-filter: blur(3px);
+            z-index: 998;
+        }
+        .sidebar-overlay.visible { display: block; }
+
+        @media (max-width: 768px) {
+            .sidebar-toggle { display: flex; }
+            .app-layout { flex-direction: column; }
+            .sidebar {
+                position: fixed;
+                top: 0; left: -280px;
+                width: 260px; min-width: 260px;
+                height: 100vh; max-height: 100vh;
+                border-radius: 0 25px 25px 0;
+                z-index: 999;
+                transition: left 0.35s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+                padding-top: 25px;
+                background: rgba(255,255,255,0.55);
+            }
+            .sidebar.sidebar-open { left: 0; box-shadow: 5px 0 30px rgba(0,0,0,0.2); }
+            .main-content { width: 100%; }
+            .section-panel { padding: 18px; border-radius: 20px; }
+        }
+        @media (min-width: 769px) and (max-width: 1024px) {
+            .sidebar { width: 70px; min-width: 70px; }
+            .sidebar-label, .sidebar-group-label { display: none; }
+            .sidebar-item { justify-content: center; padding: 12px 8px; }
+            .sidebar-emoji { font-size: 1.6em; }
         }
         .card-header {
             display: flex;
@@ -517,9 +715,9 @@ HTML_TEMPLATE = """
         }
         .mood-btn {
             padding: 12px 8px;
-            border: 3px solid #E0E7FF;
+            border: 2px solid rgba(0,0,0,0.06);
             border-radius: 18px;
-            background: linear-gradient(145deg, #FFFFFF, #F1F5F9);
+            background: #F1F5F9;
             cursor: pointer;
             text-align: center;
             transition: all 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55);
@@ -530,12 +728,21 @@ HTML_TEMPLATE = """
             align-items: center;
             justify-content: center;
             min-height: 80px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
         }
+        .mood-happy { background: #FFF8D6; border-color: #F0E4A6; }
+        .mood-sad { background: #E8F1FF; border-color: #C5D8F0; }
+        .mood-angry { background: #FFE5E5; border-color: #F0C5C5; }
+        .mood-calm { background: #EAF8EF; border-color: #C5E8D0; }
+        .mood-worried { background: #F3E9FF; border-color: #D8C5F0; }
+        .mood-excited { background: #FFF1E0; border-color: #F0DCC0; }
+        .mood-confused { background: #EAF7F7; border-color: #C5E0E0; }
+        .mood-scared { background: #ECECFF; border-color: #D0D0F0; }
         .mood-btn:hover {
-            border-color: #6C5CE7;
-            background: linear-gradient(145deg, #DFE6E9, #FFEAA7);
-            transform: scale(1.08);
+            transform: scale(1.05);
+            box-shadow: 0 4px 14px rgba(0,0,0,0.08);
         }
+        @keyframes fadein { 0% { opacity: 0; } 100% { opacity: 1; } }
         .mood-btn.selected {
             border-color: #00B894;
             background: linear-gradient(145deg, #00B894, #55EFC4);
@@ -594,7 +801,7 @@ HTML_TEMPLATE = """
         }
 
         .chat-messages {
-            height: 250px;
+            height: 300px;
             overflow-y: auto;
             border: 3px solid #DFE6E9;
             border-radius: 20px;
@@ -656,14 +863,17 @@ HTML_TEMPLATE = """
         .stat {
             text-align: center;
             padding: 20px 10px;
-            background: linear-gradient(135deg, #74B9FF, #0984E3);
+            background: linear-gradient(135deg, #89B4FA, #5B9BF0);
             border-radius: 20px;
             color: white;
             transition: all 0.3s ease;
         }
         .stat:hover {
-            transform: scale(1.1);
+            transform: translateY(-4px);
+            box-shadow: 0 12px 25px rgba(0,0,0,0.12);
         }
+        .stat-icon { font-size: 1.6em; margin-bottom: 4px; }
+        .stat-micro { font-size: 0.7em; opacity: 0.85; margin-top: 4px; font-weight: 600; }
         .stat-number {
             font-size: 2.5em;
             font-weight: 900;
@@ -1179,9 +1389,52 @@ HTML_TEMPLATE = """
             transform: scale(1.15) rotate(10deg);
         }
         .badge:not(.earned) {
-            opacity: 0.5;
-            filter: grayscale(100%);
+            opacity: 0.45;
+            filter: grayscale(100%) blur(0.5px);
         }
+        .badge:not(.earned):hover {
+            transform: scale(1.05);
+            opacity: 0.6;
+        }
+        .badge.next-unlock {
+            opacity: 0.7;
+            filter: grayscale(50%);
+            animation: nextBadgeGlow 2s ease-in-out infinite;
+        }
+        @keyframes nextBadgeGlow {
+            0%, 100% { box-shadow: 0 0 8px rgba(108, 92, 231, 0.3); }
+            50% { box-shadow: 0 0 18px rgba(108, 92, 231, 0.6); }
+        }
+        .badge[data-tooltip]:hover::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: -30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #2D3436;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-size: 10px;
+            font-weight: 700;
+            white-space: nowrap;
+            z-index: 10;
+        }
+        .badges-container .badge {
+            animation: badgeFadeIn 0.4s ease-out both;
+        }
+        .badges-container .badge:nth-child(1) { animation-delay: 0.05s; }
+        .badges-container .badge:nth-child(2) { animation-delay: 0.1s; }
+        .badges-container .badge:nth-child(3) { animation-delay: 0.15s; }
+        .badges-container .badge:nth-child(4) { animation-delay: 0.2s; }
+        .badges-container .badge:nth-child(5) { animation-delay: 0.25s; }
+        .badges-container .badge:nth-child(6) { animation-delay: 0.3s; }
+        .badges-container .badge:nth-child(7) { animation-delay: 0.35s; }
+        @keyframes badgeFadeIn {
+            0% { opacity: 0; transform: scale(0.8); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+        .badges-container .badge:not(.earned) { animation: badgeFadeIn 0.4s ease-out both; }
         .badge-icon {
             font-size: 28px;
         }
@@ -1207,8 +1460,8 @@ HTML_TEMPLATE = """
             border-radius: 20px;
             text-align: center;
             margin-bottom: 20px;
-            border: 4px solid white;
-            box-shadow: 0 10px 30px rgba(255, 107, 107, 0.4);
+            border: 1px solid rgba(255,255,255,0.4);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.05);
         }
         .streak-number {
             font-size: 3.5em;
@@ -1224,15 +1477,36 @@ HTML_TEMPLATE = """
         }
         .streak-fire {
             font-size: 2em;
-            animation: fireFlicker 0.5s ease-in-out infinite alternate;
+            animation: fireFlicker 1.5s ease-in-out infinite alternate;
+        }
+        .streak-subtitle {
+            color: rgba(255,255,255,0.85);
+            font-weight: 600;
+            font-size: 0.85em;
+            margin-top: 4px;
+        }
+        .streak-sparkle {
+            position: absolute;
+            pointer-events: none;
+            font-size: 1.2em;
+            animation: sparkleUp 0.8s ease-out forwards;
+        }
+        @keyframes sparkleUp {
+            0% { opacity: 1; transform: translate(0, 0) scale(1); }
+            100% { opacity: 0; transform: translate(var(--sx), -40px) scale(0.3); }
         }
         @keyframes streakPulse {
             0%, 100% { transform: scale(1); }
             50% { transform: scale(1.05); }
         }
         @keyframes fireFlicker {
-            0% { transform: scale(1) rotate(-5deg); }
-            100% { transform: scale(1.1) rotate(5deg); }
+            0% { transform: scale(1) rotate(-3deg); opacity: 0.85; }
+            100% { transform: scale(1.15) rotate(3deg); opacity: 1; }
+        }
+        #section-journey { animation: journeyFadeIn 0.6s ease-out; }
+        @keyframes journeyFadeIn {
+            0% { opacity: 0; transform: translateY(10px); }
+            100% { opacity: 1; transform: translateY(0); }
         }
 
         /* Level Progress */
@@ -1241,7 +1515,8 @@ HTML_TEMPLATE = """
             padding: 20px;
             border-radius: 20px;
             margin: 20px 0;
-            border: 4px solid white;
+            border: 1px solid rgba(255,255,255,0.4);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.05);
         }
         .level-header {
             display: flex;
@@ -1272,7 +1547,7 @@ HTML_TEMPLATE = """
             height: 100%;
             background: linear-gradient(90deg, #55EFC4, #00B894);
             border-radius: 10px;
-            transition: width 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            transition: width 1s cubic-bezier(0.25, 0.46, 0.45, 0.94);
         }
         .xp-text {
             color: white;
@@ -1642,10 +1917,140 @@ HTML_TEMPLATE = """
             border-radius: 10px;
             font-weight: 600;
         }
+
+        /* Auth Screen - full page gate */
+        .auth-screen {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: linear-gradient(180deg, #8DD8D3 0%, #9DD4A8 25%, #F5E4A8 50%, #F5B8B8 75%, #D4A0B8 100%);
+            z-index: 10000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: opacity 0.4s;
+        }
+        .auth-screen.hidden { display: none; }
+        .auth-card {
+            background: rgba(255,255,255,0.9);
+            backdrop-filter: blur(20px);
+            border-radius: 28px;
+            padding: 40px 36px;
+            width: 90%;
+            max-width: 420px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+            border: 1px solid rgba(255,255,255,0.8);
+        }
+        .auth-logo {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        .auth-logo img {
+            width: 80px;
+            height: 80px;
+            border-radius: 20px;
+            margin-bottom: 12px;
+        }
+        .auth-logo h1 {
+            font-size: 2.2em;
+            background: linear-gradient(135deg, #FF6B6B, #4ECDC4, #FFE66D);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .auth-logo p { color: #636E72; font-size: 14px; margin-top: 4px; }
+        .auth-tabs { display: flex; gap: 8px; margin-bottom: 20px; }
+        .auth-tab {
+            flex: 1;
+            padding: 10px;
+            border: 2px solid #DFE6E9;
+            border-radius: 12px;
+            background: white;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: 700;
+            font-size: 14px;
+            color: #636E72;
+            transition: all 0.2s;
+        }
+        .auth-tab.active { background: #6C5CE7; color: white; border-color: #6C5CE7; }
+        .auth-form { display: none; }
+        .auth-form.active { display: block; }
+        .auth-input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #DFE6E9;
+            border-radius: 12px;
+            font-family: inherit;
+            font-size: 14px;
+            margin-bottom: 12px;
+            outline: none;
+            transition: border-color 0.2s;
+            background: white;
+        }
+        .auth-input:focus { border-color: #6C5CE7; }
+        .auth-btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #6C5CE7, #A29BFE);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-family: inherit;
+            font-weight: 700;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .auth-btn:hover { transform: scale(1.02); }
+        .auth-error {
+            color: #D63031;
+            text-align: center;
+            margin-bottom: 12px;
+            font-size: 13px;
+            min-height: 18px;
+        }
+
+        /* Header auth area (logged-in state) */
+        .header-auth {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+        .header-user-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 700;
+            color: #2D3436;
+            font-size: 14px;
+        }
+        .header-logout-btn {
+            padding: 6px 14px;
+            background: #DFE6E9;
+            color: #636E72;
+            border: none;
+            border-radius: 16px;
+            font-family: inherit;
+            font-weight: 600;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .header-logout-btn:hover { background: #B2BEC3; color: white; }
     </style>
 </head>
 <body>
     <!-- Help Icon -->
+    <div class="heart-video-wrapper" id="heart-video-wrapper" onclick="toggleHeartVideo('heart-video')">
+        <video id="heart-video" loop muted playsinline>
+            <source src="/static/buddy/heart-video.mp4" type="video/mp4">
+        </video>
+    </div>
+    <div class="heart-video-wrapper heart-video-right" id="heart-video-wrapper-2" onclick="toggleHeartVideo('heart-video-2')">
+        <video id="heart-video-2" loop muted playsinline>
+            <source src="/static/buddy/heart-video-2.mp4" type="video/mp4">
+        </video>
+    </div>
     <div class="help-icon" onclick="openHelpModal()">💜</div>
     
     <!-- Help Modal -->
@@ -1688,72 +2093,165 @@ HTML_TEMPLATE = """
                 <source src="/static/buddy/buddy-animated.webm" type="video/webm">
                 <source src="/static/buddy/buddy-animation.mp4" type="video/mp4">
             </video>
+            <div class="header-auth" id="header-auth"></div>
         </div>
 
-        <div class="grid">
+        <button class="sidebar-toggle" id="sidebar-toggle" onclick="toggleSidebar()">
+            <span>☰</span> <span>Menu</span>
+        </button>
+
+        <div class="app-layout">
+            <nav class="sidebar" id="sidebar" role="navigation" aria-label="Main navigation">
+                <div class="sidebar-group">
+                    <div class="sidebar-group-label">My Day</div>
+                    <button class="sidebar-item active" data-section="journey" onclick="showSection('journey')">
+                        <span class="sidebar-emoji">🌟</span>
+                        <span class="sidebar-label">Your Journey</span>
+                    </button>
+                    <button class="sidebar-item" data-section="mood" onclick="showSection('mood')">
+                        <span class="sidebar-emoji">💛</span>
+                        <span class="sidebar-label">How's Your Heart?</span>
+                    </button>
+                </div>
+                <div class="sidebar-group">
+                    <div class="sidebar-group-label">Talk & Share</div>
+                    <button class="sidebar-item" data-section="chat" onclick="showSection('chat')">
+                        <span class="sidebar-emoji">💬</span>
+                        <span class="sidebar-label">Chat with Buddy</span>
+                    </button>
+                    <button class="sidebar-item" data-section="report" onclick="showSection('report')">
+                        <span class="sidebar-emoji">🛡️</span>
+                        <span class="sidebar-label">Tell Someone</span>
+                    </button>
+                    <button class="sidebar-item" data-section="trust" onclick="showSection('trust')">
+                        <span class="sidebar-emoji">👥</span>
+                        <span class="sidebar-label">My Trust Team</span>
+                    </button>
+                </div>
+                <div class="sidebar-group">
+                    <div class="sidebar-group-label">Feel Good</div>
+                    <button class="sidebar-item" data-section="kindness" onclick="showSection('kindness')">
+                        <span class="sidebar-emoji">📝</span>
+                        <span class="sidebar-label">Kindness Journal</span>
+                    </button>
+                    <button class="sidebar-item" data-section="confidence" onclick="showSection('confidence')">
+                        <span class="sidebar-emoji">💪</span>
+                        <span class="sidebar-label">Confidence Boosters</span>
+                    </button>
+                    <button class="sidebar-item" data-section="courage" onclick="showSection('courage')">
+                        <span class="sidebar-emoji">🦁</span>
+                        <span class="sidebar-label">Courage Builder</span>
+                    </button>
+                </div>
+                <div class="sidebar-group">
+                    <div class="sidebar-group-label">Learn & Practice</div>
+                    <button class="sidebar-item" data-section="scenarios" onclick="showSection('scenarios')">
+                        <span class="sidebar-emoji">🤔</span>
+                        <span class="sidebar-label">What Should I Do?</span>
+                    </button>
+                    <button class="sidebar-item" data-section="practice" onclick="showSection('practice')">
+                        <span class="sidebar-emoji">🎤</span>
+                        <span class="sidebar-label">Practice Pod</span>
+                    </button>
+                    <button class="sidebar-item" data-section="lessons" onclick="showSection('lessons')">
+                        <span class="sidebar-emoji">📚</span>
+                        <span class="sidebar-label">Quick Lessons</span>
+                    </button>
+                </div>
+                <div class="sidebar-group">
+                    <div class="sidebar-group-label">My Stuff</div>
+                    <button class="sidebar-item" data-section="progress" onclick="showSection('progress')">
+                        <span class="sidebar-emoji">📊</span>
+                        <span class="sidebar-label">My Progress</span>
+                    </button>
+                    <button class="sidebar-item" data-section="resources" onclick="showSection('resources')">
+                        <span class="sidebar-emoji">🌱</span>
+                        <span class="sidebar-label">Learn & Grow</span>
+                    </button>
+                </div>
+            </nav>
+
+            <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+
+            <main class="main-content" id="main-content" role="main">
+
             <!-- Mood Tracker -->
-            <div class="card card-order-2">
+            <div class="section-panel" id="section-mood">
                 <div class="card-header">
                     <video class="card-header-buddy" autoplay loop muted playsinline>
                         <source src="/static/buddy/buddy-animated.webm" type="video/webm">
                     </video>
                     <h2 style="margin: 0; padding: 0;">How's your heart feeling?</h2>
                 </div>
-                <div class="mood-grid">
-                    <div class="mood-btn" onclick="selectMood('happy', '😊')">
-                        <span class="emoji">😊</span>
-                        <span>Happy</span>
-                    </div>
-                    <div class="mood-btn" onclick="selectMood('sad', '😢')">
-                        <span class="emoji">😢</span>
-                        <span>Sad</span>
-                    </div>
-                    <div class="mood-btn" onclick="selectMood('angry', '😠')">
-                        <span class="emoji">😠</span>
-                        <span>Angry</span>
-                    </div>
-                    <div class="mood-btn" onclick="selectMood('calm', '😌')">
-                        <span class="emoji">😌</span>
-                        <span>Calm</span>
-                    </div>
-                    <div class="mood-btn" onclick="selectMood('worried', '😟')">
-                        <span class="emoji">😟</span>
-                        <span>Worried</span>
-                    </div>
-                    <div class="mood-btn" onclick="selectMood('excited', '🤗')">
-                        <span class="emoji">🤗</span>
-                        <span>Excited</span>
-                    </div>
-                    <div class="mood-btn" onclick="selectMood('confused', '😕')">
-                        <span class="emoji">😕</span>
-                        <span>Confused</span>
-                    </div>
-                    <div class="mood-btn" onclick="selectMood('scared', '😨')">
-                        <span class="emoji">😨</span>
-                        <span>Scared</span>
-                    </div>
-                </div>
-                <button class="btn" onclick="saveMood()" style="width: 100%;">✨ Save My Feeling</button>
+                <div style="width: 120px; height: 4px; background: linear-gradient(90deg, #A29BFE, #55EFC4, #FFE66D); border-radius: 4px; margin: 8px auto 20px;"></div>
 
-                <!-- Buddy's Response to Feeling -->
-                <div id="mood-response" class="hidden" style="margin-top: 15px; padding: 18px; background: linear-gradient(135deg, #E8F5E9, #C8E6C9); border-radius: 18px; border: 3px solid #81C784;">
-                    <p id="mood-response-text" style="font-weight: 700; color: #2E7D32; margin: 0 0 12px 0; line-height: 1.4;"></p>
-                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                        <button class="btn" onclick="tellMeMore()" style="flex: 1; padding: 12px; font-size: 14px; background: linear-gradient(135deg, #6C5CE7, #A29BFE);">Tell me more</button>
-                        <button class="btn" id="mood-action-btn" onclick="moodAction()" style="flex: 1; padding: 12px; font-size: 14px; background: linear-gradient(135deg, #00B894, #55EFC4);"></button>
+                <!-- Zone 1: Mood Selection -->
+                <div style="background: #F8FAFF; border-radius: 20px; padding: 24px; margin-bottom: 16px;">
+                    <div class="mood-grid">
+                        <div class="mood-btn mood-happy" onclick="selectMood('happy', '😊')">
+                            <span class="emoji">😊</span>
+                            <span>Happy</span>
+                        </div>
+                        <div class="mood-btn mood-sad" onclick="selectMood('sad', '😢')">
+                            <span class="emoji">😢</span>
+                            <span>Sad</span>
+                        </div>
+                        <div class="mood-btn mood-angry" onclick="selectMood('angry', '😠')">
+                            <span class="emoji">😠</span>
+                            <span>Angry</span>
+                        </div>
+                        <div class="mood-btn mood-calm" onclick="selectMood('calm', '😌')">
+                            <span class="emoji">😌</span>
+                            <span>Calm</span>
+                        </div>
+                        <div class="mood-btn mood-worried" onclick="selectMood('worried', '😟')">
+                            <span class="emoji">😟</span>
+                            <span>Worried</span>
+                        </div>
+                        <div class="mood-btn mood-excited" onclick="selectMood('excited', '🤗')">
+                            <span class="emoji">🤗</span>
+                            <span>Excited</span>
+                        </div>
+                        <div class="mood-btn mood-confused" onclick="selectMood('confused', '😕')">
+                            <span class="emoji">😕</span>
+                            <span>Confused</span>
+                        </div>
+                        <div class="mood-btn mood-scared" onclick="selectMood('scared', '😨')">
+                            <span class="emoji">😨</span>
+                            <span>Scared</span>
+                        </div>
                     </div>
                 </div>
 
-                <!-- Mood History -->
-                <div style="margin-top: 20px;">
+                <!-- Zone 2: Save Button -->
+                <div style="background: #F5F0FF; border-radius: 20px; padding: 20px; margin-bottom: 16px;">
+                    <button class="btn" onclick="saveMood()" style="width: 100%;">✨ Save My Feeling</button>
+
+                    <!-- Buddy's Response to Feeling -->
+                    <div id="mood-response" class="hidden" style="margin-top: 15px; padding: 18px; background: linear-gradient(135deg, #E8F5E9, #C8E6C9); border-radius: 18px; border: 3px solid #81C784;">
+                        <p id="mood-response-text" style="font-weight: 700; color: #2E7D32; margin: 0 0 12px 0; line-height: 1.4;"></p>
+                        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                            <button class="btn" onclick="tellMeMore()" style="flex: 1; padding: 12px; font-size: 14px; background: linear-gradient(135deg, #6C5CE7, #A29BFE);">Tell me more</button>
+                            <button class="btn" id="mood-action-btn" onclick="moodAction()" style="flex: 1; padding: 12px; font-size: 14px; background: linear-gradient(135deg, #00B894, #55EFC4);"></button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Zone 3: Mood History -->
+                <div style="background: #FFF8F3; border-radius: 20px; padding: 24px;">
                     <h3 style="text-align: center; color: #6C5CE7; margin-bottom: 10px;">📅 My Mood History</h3>
-                    <div id="mood-history" style="max-height: 200px; overflow-y: auto;"></div>
+                    <div id="mood-history" style="max-height: 250px; overflow-y: auto;"></div>
+                    <div id="mood-empty-state" style="text-align: center; padding: 30px 10px; animation: fadein 0.6s ease;">
+                        <div style="font-size: 2.5em; margin-bottom: 10px;">💛</div>
+                        <div style="font-weight: 800; color: #2D3436; font-size: 1.1em; margin-bottom: 6px;">No feelings saved yet.</div>
+                        <div style="color: #636E72; font-weight: 600; font-size: 0.9em;">Every heart has a story. Start yours today. ✨</div>
+                    </div>
                     <p id="mood-pattern" style="text-align: center; margin-top: 10px; font-weight: 700; color: #636E72; font-size: 0.9em;"></p>
                 </div>
             </div>
 
             <!-- AI Chat -->
-            <div class="card card-order-3">
+            <div class="section-panel" id="section-chat">
                 <div class="card-header">
                     <video class="card-header-buddy" autoplay loop muted playsinline>
                         <source src="/static/buddy/buddy-animated.webm" type="video/webm">
@@ -1789,7 +2287,7 @@ HTML_TEMPLATE = """
             </div>
 
             <!-- Report Incident -->
-            <div class="card card-order-4">
+            <div class="section-panel" id="section-report">
                 <div class="card-header">
                     <video class="card-header-buddy" autoplay loop muted playsinline>
                         <source src="/static/buddy/buddy-animated.webm" type="video/webm">
@@ -1802,22 +2300,22 @@ HTML_TEMPLATE = """
 
                 <!-- Trust Team Selector for sending report -->
                 <div style="background: linear-gradient(135deg, #E8F5E9, #C8E6C9); padding: 15px; border-radius: 15px; margin: 15px 0; border: 2px solid #81C784;">
-                    <label style="font-weight: 700; color: #2E7D32; display: block; margin-bottom: 8px;">📧 Who do you want to tell?</label>
-                    <select id="report-trust-select" style="width: 100%; padding: 12px; border-radius: 10px; border: 2px solid #81C784; font-size: 15px; font-weight: 600;">
-                        <option value="">-- Select from your Trust Team --</option>
-                    </select>
-                    <p style="font-size: 12px; color: #558B2F; margin-top: 8px;">Select someone to send this report to via email</p>
+                    <label style="font-weight: 700; color: #2E7D32; display: block; margin-bottom: 10px;">📧 Who do you want to tell?</label>
+                    <div id="report-trust-checklist" style="display: flex; flex-direction: column; gap: 8px;">
+                        <p style="color: #558B2F; font-weight: 600; font-size: 14px;">Add people in the Trust Team section first</p>
+                    </div>
+                    <p style="font-size: 12px; color: #558B2F; margin-top: 10px;">Tick the people you want to send this report to</p>
                 </div>
 
-                <label style="font-size: 16px; margin: 15px 0; display: block;">
-                    <input type="checkbox" id="report-anonymous" style="margin-right: 8px;"> Keep my name private (anonymous)
+                <label style="display: flex; align-items: center; gap: 10px; padding: 12px 15px; background: linear-gradient(135deg, #EDE9FE, #DDD6FE); border-radius: 12px; border: 2px solid #A78BFA; margin: 15px 0; cursor: pointer; font-size: 16px; font-weight: 700; color: #5B21B6;">
+                    <input type="checkbox" id="report-anonymous" style="width: 20px; height: 20px; accent-color: #6C5CE7; cursor: pointer;"> 🔒 Keep my name private (anonymous)
                 </label>
                 <button class="btn" onclick="submitReport()">🛡️ Send My Report</button>
                 <div id="report-success" class="success hidden">Your report is safe with us. Thank you for being brave! 🌟💙</div>
             </div>
 
             <!-- Learning Resources -->
-            <div class="card card-order-12">
+            <div class="section-panel" id="section-resources">
                 <div class="card-header">
                     <video class="card-header-buddy" autoplay loop muted playsinline>
                         <source src="/static/buddy/buddy-animated.webm" type="video/webm">
@@ -1844,7 +2342,7 @@ HTML_TEMPLATE = """
             </div>
 
             <!-- Statistics & Gamification - TOP OF PAGE -->
-            <div class="card card-order-1">
+            <div class="section-panel section-active" id="section-journey">
                 <div class="card-header">
                     <video class="card-header-buddy" autoplay loop muted playsinline>
                         <source src="/static/buddy/buddy-animated.webm" type="video/webm">
@@ -1853,10 +2351,11 @@ HTML_TEMPLATE = """
                 </div>
 
                 <!-- Daily Streak -->
-                <div class="streak-display">
+                <div class="streak-display" style="position: relative; overflow: visible;">
                     <span class="streak-fire">🔥</span>
                     <div class="streak-number" id="streak-count">0</div>
                     <div class="streak-label">Day Streak!</div>
+                    <div class="streak-subtitle">Small steps create strong hearts 💛</div>
                 </div>
 
                 <!-- Level Progress -->
@@ -1869,36 +2368,37 @@ HTML_TEMPLATE = """
                         <div class="xp-fill" id="xp-fill" style="width: 0%"></div>
                     </div>
                     <div class="xp-text"><span id="xp-current">0</span> / <span id="xp-needed">100</span> XP to next level</div>
+                    <div id="level-next" style="color: rgba(255,255,255,0.75); font-size: 0.8em; text-align: center; margin-top: 4px; font-weight: 600;">Next: Brave Sharer</div>
                 </div>
 
                 <!-- Badges -->
                 <h3 style="text-align: center; margin: 20px 0 10px; color: #6C5CE7;">🎖️ My Badges</h3>
                 <div class="badges-container" id="badges-container">
-                    <div class="badge" id="badge-first-mood" title="First Feelings - Share your first mood">
+                    <div class="badge" id="badge-first-mood" data-tooltip="Share your first mood">
                         <span class="badge-icon">😊</span>
                         <span class="badge-name">First Feelings</span>
                     </div>
-                    <div class="badge" id="badge-chatty" title="Chatty Friend - Chat with Buddy 5 times">
+                    <div class="badge" id="badge-chatty" data-tooltip="Chat with Buddy 5 times">
                         <span class="badge-icon">💬</span>
                         <span class="badge-name">Chatty</span>
                     </div>
-                    <div class="badge" id="badge-brave" title="Brave Heart - Submit a report">
+                    <div class="badge" id="badge-brave" data-tooltip="Submit a report">
                         <span class="badge-icon">🦁</span>
                         <span class="badge-name">Brave Heart</span>
                     </div>
-                    <div class="badge" id="badge-kind" title="Kind Soul - Add 3 kindness entries">
+                    <div class="badge" id="badge-kind" data-tooltip="Add 3 kindness entries">
                         <span class="badge-icon">💛</span>
                         <span class="badge-name">Kind Soul</span>
                     </div>
-                    <div class="badge" id="badge-streak" title="On Fire - 3 day streak">
+                    <div class="badge" id="badge-streak" data-tooltip="3 day streak">
                         <span class="badge-icon">🔥</span>
                         <span class="badge-name">On Fire</span>
                     </div>
-                    <div class="badge" id="badge-courage" title="Courage Champ - Complete a challenge">
+                    <div class="badge" id="badge-courage" data-tooltip="Complete a challenge">
                         <span class="badge-icon">🦸</span>
                         <span class="badge-name">Courage</span>
                     </div>
-                    <div class="badge" id="badge-voice" title="Strong Voice - Record 3 practice sessions">
+                    <div class="badge" id="badge-voice" data-tooltip="Record 3 practice sessions">
                         <span class="badge-icon">🎙️</span>
                         <span class="badge-name">Strong Voice</span>
                     </div>
@@ -1907,25 +2407,31 @@ HTML_TEMPLATE = """
                 <!-- Stats Grid -->
                 <div class="stats">
                     <div class="stat">
+                        <div class="stat-icon">💛</div>
                         <div class="stat-number" id="mood-count">0</div>
                         <div>Feelings</div>
+                        <div class="stat-micro" id="mood-micro">Share how you feel</div>
                     </div>
                     <div class="stat">
+                        <div class="stat-icon">💬</div>
                         <div class="stat-number" id="chat-count">0</div>
                         <div>Chats</div>
+                        <div class="stat-micro" id="chat-micro">Talk to Buddy</div>
                     </div>
                     <div class="stat">
+                        <div class="stat-icon">🛡️</div>
                         <div class="stat-number" id="report-count">0</div>
                         <div>Reports</div>
+                        <div class="stat-micro" id="report-micro">Speak up bravely</div>
                     </div>
                 </div>
-                <p style="text-align: center; margin-top: 20px; color: #7C3AED; font-weight: 600;">
-                    🌟 Every step counts! You're doing amazing! 🌟
+                <p id="journey-footer" style="text-align: center; margin-top: 20px; color: #7C3AED; font-weight: 600;">
+                    Your heart story is just beginning 💛
                 </p>
             </div>
 
             <!-- Kindness Journal -->
-            <div class="card card-order-6">
+            <div class="section-panel" id="section-kindness">
                 <div class="card-header">
                     <video class="card-header-buddy" autoplay loop muted playsinline>
                         <source src="/static/buddy/buddy-animated.webm" type="video/webm">
@@ -1970,7 +2476,7 @@ HTML_TEMPLATE = """
             </div>
 
             <!-- What Should I Do? -->
-            <div class="card card-order-7">
+            <div class="section-panel" id="section-scenarios">
                 <div class="card-header">
                     <video class="card-header-buddy" autoplay loop muted playsinline>
                         <source src="/static/buddy/buddy-animated.webm" type="video/webm">
@@ -2002,7 +2508,7 @@ HTML_TEMPLATE = """
             </div>
 
             <!-- My Trust Team - Next to Tell Someone -->
-            <div class="card card-order-5">
+            <div class="section-panel" id="section-trust">
                 <div class="card-header">
                     <video class="card-header-buddy" autoplay loop muted playsinline>
                         <source src="/static/buddy/buddy-animated.webm" type="video/webm">
@@ -2041,7 +2547,7 @@ HTML_TEMPLATE = """
             </div>
 
             <!-- Confidence Boosters -->
-            <div class="card card-order-8">
+            <div class="section-panel" id="section-confidence">
                 <div class="card-header">
                     <video class="card-header-buddy" autoplay loop muted playsinline>
                         <source src="/static/buddy/buddy-animated.webm" type="video/webm">
@@ -2067,7 +2573,7 @@ HTML_TEMPLATE = """
             </div>
 
             <!-- Courage Builder -->
-            <div class="card card-order-9">
+            <div class="section-panel" id="section-courage">
                 <div class="card-header">
                     <video class="card-header-buddy" autoplay loop muted playsinline>
                         <source src="/static/buddy/buddy-animated.webm" type="video/webm">
@@ -2156,7 +2662,7 @@ HTML_TEMPLATE = """
             </div>
 
             <!-- Practice Pod -->
-            <div class="card card-order-10">
+            <div class="section-panel" id="section-practice">
                 <div class="card-header">
                     <video class="card-header-buddy" autoplay loop muted playsinline>
                         <source src="/static/buddy/buddy-animated.webm" type="video/webm">
@@ -2209,7 +2715,7 @@ HTML_TEMPLATE = """
             </div>
 
             <!-- Progress Dashboard -->
-            <div class="card card-order-11">
+            <div class="section-panel" id="section-progress">
                 <div class="card-header">
                     <video class="card-header-buddy" autoplay loop muted playsinline>
                         <source src="/static/buddy/buddy-animated.webm" type="video/webm">
@@ -2280,7 +2786,7 @@ HTML_TEMPLATE = """
             </div>
 
             <!-- Learn & Grow 2 - Quick Lessons -->
-            <div class="card card-order-13">
+            <div class="section-panel" id="section-lessons">
                 <div class="card-header">
                     <video class="card-header-buddy" autoplay loop muted playsinline>
                         <source src="/static/buddy/buddy-animated.webm" type="video/webm">
@@ -2329,10 +2835,48 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
             </div>
+
+            </main>
         </div>
     </div>
 
     <script>
+        // ============================================
+        // SIDEBAR NAVIGATION
+        // ============================================
+        let currentSection = 'journey';
+        let sidebarOpen = false;
+
+        function showSection(sectionId) {
+            document.querySelectorAll('.section-panel').forEach(p => p.classList.remove('section-active'));
+            document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+
+            const panel = document.getElementById('section-' + sectionId);
+            if (panel) panel.classList.add('section-active');
+
+            const item = document.querySelector('.sidebar-item[data-section="' + sectionId + '"]');
+            if (item) item.classList.add('active');
+
+            currentSection = sectionId;
+            localStorage.setItem('buddyLastSection', sectionId);
+
+            if (window.innerWidth <= 768) closeSidebar();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        function toggleSidebar() {
+            if (sidebarOpen) { closeSidebar(); return; }
+            document.getElementById('sidebar').classList.add('sidebar-open');
+            document.getElementById('sidebar-overlay').classList.add('visible');
+            sidebarOpen = true;
+        }
+
+        function closeSidebar() {
+            document.getElementById('sidebar').classList.remove('sidebar-open');
+            document.getElementById('sidebar-overlay').classList.remove('visible');
+            sidebarOpen = false;
+        }
+
         let selectedMood = null;
         let moodCount = parseInt(localStorage.getItem('moodCount') || '0');
         let chatCount = parseInt(localStorage.getItem('chatCount') || '0');
@@ -2463,10 +3007,39 @@ HTML_TEMPLATE = """
             }
         };
 
-        // Update stats on load
-        document.getElementById('mood-count').textContent = moodCount;
-        document.getElementById('chat-count').textContent = chatCount;
-        document.getElementById('report-count').textContent = reportCount;
+        // Count-up animation helper
+        function animateCount(el, target) {
+            if (target === 0) { el.textContent = '0'; return; }
+            const duration = 800;
+            const start = performance.now();
+            function step(now) {
+                const p = Math.min((now - start) / duration, 1);
+                el.textContent = Math.round(target * p);
+                if (p < 1) requestAnimationFrame(step);
+            }
+            requestAnimationFrame(step);
+        }
+
+        // Update stats on load with count-up + micro text
+        animateCount(document.getElementById('mood-count'), moodCount);
+        animateCount(document.getElementById('chat-count'), chatCount);
+        animateCount(document.getElementById('report-count'), reportCount);
+        if (moodCount > 0) document.getElementById('mood-micro').textContent = `Shared ${moodCount} time${moodCount !== 1 ? 's' : ''} 💛`;
+        if (chatCount > 0) document.getElementById('chat-micro').textContent = `${chatCount} conversation${chatCount !== 1 ? 's' : ''} 💬`;
+        if (reportCount > 0) document.getElementById('report-micro').textContent = `${reportCount} brave step${reportCount !== 1 ? 's' : ''} 🛡️`;
+        // Dynamic footer
+        if (moodCount + chatCount + reportCount > 0) {
+            document.getElementById('journey-footer').textContent = 'Look how far you\\'ve come already 🌟';
+        }
+        // Highlight next unlockable badge
+        function highlightNextBadge() {
+            const badgeOrder = ['first-mood','chatty','brave','kind','streak','courage','voice'];
+            for (const id of badgeOrder) {
+                const el = document.getElementById('badge-' + id);
+                if (el && !el.classList.contains('earned')) { el.classList.add('next-unlock'); break; }
+            }
+        }
+        highlightNextBadge();
 
         function selectMood(mood, emoji) {
             document.querySelectorAll('.mood-btn').forEach(btn => btn.classList.remove('selected'));
@@ -2505,7 +3078,8 @@ HTML_TEMPLATE = """
 
             moodCount++;
             localStorage.setItem('moodCount', moodCount);
-            document.getElementById('mood-count').textContent = moodCount;
+            animateCount(document.getElementById('mood-count'), moodCount);
+            document.getElementById('mood-micro').textContent = `Shared ${moodCount} time${moodCount !== 1 ? 's' : ''} 💛`;
 
             // Show Buddy's response based on mood
             const moodData = moodResponses[selectedMood.mood];
@@ -2555,10 +3129,13 @@ HTML_TEMPLATE = """
 
         function renderMoodHistory() {
             const container = document.getElementById('mood-history');
+            const emptyState = document.getElementById('mood-empty-state');
             if (moodHistory.length === 0) {
-                container.innerHTML = '<p style="text-align: center; color: #B2BEC3; font-weight: 600;">No moods saved yet. Share how you feel!</p>';
+                container.innerHTML = '';
+                if (emptyState) emptyState.style.display = 'block';
                 return;
             }
+            if (emptyState) emptyState.style.display = 'none';
 
             container.innerHTML = moodHistory.map(entry => `
                 <div style="display: flex; align-items: center; gap: 12px; padding: 10px 15px; margin: 6px 0;
@@ -2624,9 +3201,12 @@ HTML_TEMPLATE = """
             const message = input.value.trim();
             if (!message) return;
 
-            // Add user message
+            // Add user message (sanitize to prevent XSS)
             const chatMessages = document.getElementById('chat-messages');
-            chatMessages.innerHTML += `<div class="message user-message">${message}</div>`;
+            const userDiv = document.createElement('div');
+            userDiv.className = 'message user-message';
+            userDiv.textContent = message;
+            chatMessages.appendChild(userDiv);
 
             // Clear input
             input.value = '';
@@ -2639,26 +3219,34 @@ HTML_TEMPLATE = """
             })
             .then(response => response.json())
             .then(data => {
-                chatMessages.innerHTML += `<div class="message ai-message">${data.response}</div>`;
+                const aiDiv = document.createElement('div');
+                aiDiv.className = 'message ai-message';
+                aiDiv.textContent = data.response;
+                chatMessages.appendChild(aiDiv);
                 chatMessages.scrollTop = chatMessages.scrollHeight;
                 
                 chatCount++;
                 localStorage.setItem('chatCount', chatCount);
-                document.getElementById('chat-count').textContent = chatCount;
+                animateCount(document.getElementById('chat-count'), chatCount);
+                document.getElementById('chat-micro').textContent = `${chatCount} conversation${chatCount !== 1 ? 's' : ''} 💬`;
             });
         }
 
         function populateReportTrustDropdown() {
-            const dropdown = document.getElementById('report-trust-select');
-            if (!dropdown) return;
+            const checklist = document.getElementById('report-trust-checklist');
+            if (!checklist) return;
 
-            dropdown.innerHTML = '<option value="">-- Select from your Trust Team --</option>';
+            if (trustTeam.length === 0) {
+                checklist.innerHTML = '<p style="color: #558B2F; font-weight: 600; font-size: 14px;">Add people in the Trust Team section first</p>';
+                return;
+            }
 
+            checklist.innerHTML = '';
             trustTeam.forEach((member, index) => {
-                const option = document.createElement('option');
-                option.value = index;
-                option.textContent = `${member.avatar} ${member.name}${member.email ? ' (has email)' : ' (no email yet)'}`;
-                dropdown.appendChild(option);
+                const label = document.createElement('label');
+                label.style.cssText = 'display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: white; border-radius: 12px; border: 2px solid #C8E6C9; cursor: pointer; font-weight: 600; font-size: 15px; transition: all 0.2s;';
+                label.innerHTML = `<input type="checkbox" class="report-trust-check" value="${index}" style="width: 20px; height: 20px; accent-color: #2E7D32; cursor: pointer;"> ${member.avatar} ${member.name}${member.email ? ' <span style="color: #2E7D32; font-size: 12px;">✉️ has email</span>' : ' <span style="color: #999; font-size: 12px;">no email yet</span>'}`;
+                checklist.appendChild(label);
             });
         }
 
@@ -2667,8 +3255,6 @@ HTML_TEMPLATE = """
             const description = document.getElementById('report-description').value;
             const location = document.getElementById('report-location').value;
             const anonymous = document.getElementById('report-anonymous').checked;
-            const trustSelect = document.getElementById('report-trust-select');
-            const selectedTrustIndex = trustSelect ? trustSelect.value : '';
 
             if (!title || !description || !location) {
                 alert('Please fill in all required fields');
@@ -2684,13 +3270,26 @@ HTML_TEMPLATE = """
                 })
             });
 
-            // Send email to selected Trust Team member if one was selected
-            if (selectedTrustIndex !== '') {
-                const member = trustTeam[parseInt(selectedTrustIndex)];
+            // Send email to all checked Trust Team members
+            const checked = document.querySelectorAll('.report-trust-check:checked');
+            const noEmailNames = [];
+            const emailAddresses = [];
+            const emailNames = [];
+
+            checked.forEach(cb => {
+                const member = trustTeam[parseInt(cb.value)];
                 if (member && member.email) {
-                    const subject = encodeURIComponent('I Need to Tell You Something Important');
-                    const reporterName = anonymous ? 'Someone who trusts you' : 'A student';
-                    const body = encodeURIComponent(`Hi ${member.name},
+                    emailAddresses.push(member.email);
+                    emailNames.push(member.name);
+                } else if (member) {
+                    noEmailNames.push(member.name);
+                }
+            });
+
+            if (emailAddresses.length > 0) {
+                const subject = encodeURIComponent('I Need to Tell You Something Important');
+                const reporterName = anonymous ? 'Someone who trusts you' : 'A student';
+                const body = encodeURIComponent(`Hi ${emailNames.join(', ')},
 
 I need to tell you about something that happened.
 
@@ -2703,10 +3302,11 @@ Where it happened: ${location}
 I trust you and I need your help with this situation.
 
 From: ${reporterName}`);
-                    window.location.href = `mailto:${member.email}?subject=${subject}&body=${body}`;
-                } else if (member && !member.email) {
-                    alert(`📧 Remember to talk to ${member.name} about this!\n\nTip: Add their email in the Trust Team section so you can send them a message next time.`);
-                }
+                window.location.href = `mailto:${emailAddresses.join(',')}?subject=${subject}&body=${body}`;
+            }
+
+            if (noEmailNames.length > 0) {
+                alert(`📧 Remember to talk to ${noEmailNames.join(', ')} about this!\\n\\nTip: Add their email in the Trust Team section so you can send them a message next time.`);
             }
 
             // Clear form
@@ -2714,16 +3314,30 @@ From: ${reporterName}`);
             document.getElementById('report-description').value = '';
             document.getElementById('report-location').value = '';
             document.getElementById('report-anonymous').checked = false;
-            if (trustSelect) trustSelect.value = '';
+            document.querySelectorAll('.report-trust-check').forEach(cb => cb.checked = false);
 
             document.getElementById('report-success').classList.remove('hidden');
             reportCount++;
             localStorage.setItem('reportCount', reportCount);
-            document.getElementById('report-count').textContent = reportCount;
+            animateCount(document.getElementById('report-count'), reportCount);
+            document.getElementById('report-micro').textContent = `${reportCount} brave step${reportCount !== 1 ? 's' : ''} 🛡️`;
 
             setTimeout(() => {
                 document.getElementById('report-success').classList.add('hidden');
             }, 3000);
+        }
+
+        // Heart videos - autoplay muted, click to toggle sound
+        (function() {
+            const hv1 = document.getElementById('heart-video');
+            const hv2 = document.getElementById('heart-video-2');
+            if (hv1) hv1.play().catch(() => {});
+            if (hv2) hv2.play().catch(() => {});
+        })();
+        function toggleHeartVideo(id) {
+            const hv = document.getElementById(id);
+            if (!hv) return;
+            hv.muted = !hv.muted;
         }
 
         function openHelpModal() {
@@ -3197,7 +3811,7 @@ You can copy this or say it in your own words.
 Getting help is smart, not weak. You deserve support! 💜`;
 
             if (member && member.email) {
-                message += `\n\nClick OK to also send an email to ${person}.`;
+                message += `\\n\\nClick OK to also send an email to ${person}.`;
                 if (confirm(message)) {
                     sendEmailTo(member.name, member.email);
                 }
@@ -3217,7 +3831,7 @@ Getting help is smart, not weak. You deserve support! 💜`;
 
             const member = trustTeam[parseInt(index)];
             if (!member.email) {
-                alert(`${member.name} doesn't have an email address saved yet.\n\nYou can add their email by clicking the ➕ Add to My Team button below!`);
+                alert(`${member.name} doesn't have an email address saved yet.\\n\\nYou can add their email by clicking the ➕ Add to My Team button below!`);
                 return;
             }
 
@@ -3258,7 +3872,7 @@ Thank you.`);
 
             document.getElementById('new-trust-name').value = '';
             document.getElementById('new-trust-email').value = '';
-            alert(`${member.name} has been added to your Trust Team! 💚${email ? '\nYou can now email them directly!' : ''}`);
+            alert(`${member.name} has been added to your Trust Team! 💚${email ? '\\nYou can now email them directly!' : ''}`);
         }
 
         // Initialize trust team and courage builder on page load
@@ -3267,6 +3881,9 @@ Thank you.`);
             // Initialize courage builder with weeks
             updateWeekButtons();
             updateCourageChallenge();
+            // Restore last viewed section
+            const lastSection = localStorage.getItem('buddyLastSection');
+            if (lastSection) showSection(lastSection);
         });
 
         // ============ CONFIDENCE BOOSTERS ============
@@ -3616,13 +4233,6 @@ Thank you.`);
             document.getElementById('courage-meter-text').textContent = meterText;
         }
 
-        // Legacy function names for compatibility
-        function updateChallenge() { updateCourageChallenge(); }
-        function completeChallenge() { completeCourageChallenge(); }
-        function nextChallenge() { nextCourageChallenge(); }
-        function prevChallenge() { prevCourageChallenge(); }
-        let challengeProgress = JSON.parse(localStorage.getItem('challengeProgress') || '[0,0,0,0]');
-
         // ============ PRACTICE POD ============
         const podPrompts = [
             // STANDING UP FOR YOURSELF - Very Gentle
@@ -3945,7 +4555,8 @@ Thank you.`);
                 xp -= xpNeeded;
                 level++;
                 localStorage.setItem('level', level);
-                alert(`🎉 LEVEL UP! You're now Level ${level}! Keep being amazing!`);
+                const lvlName = levelIdentities[level] || 'Heart Hero';
+                alert(`🎉 LEVEL UP! You're now a ${lvlName}! Keep being amazing!`);
                 createConfetti();
             }
 
@@ -3953,12 +4564,17 @@ Thank you.`);
             updateXPDisplay();
         }
 
+        const levelIdentities = {1: 'Heart Explorer', 2: 'Brave Sharer', 3: 'Kind Leader', 4: 'Heart Hero'};
         function updateXPDisplay() {
             const xpNeeded = getXPForLevel(level);
             document.getElementById('xp-current').textContent = xp;
             document.getElementById('xp-needed').textContent = xpNeeded;
             document.getElementById('xp-fill').style.width = `${(xp / xpNeeded) * 100}%`;
-            document.getElementById('level-display').textContent = `Level ${level}`;
+            const identity = levelIdentities[level] || 'Heart Hero';
+            document.getElementById('level-display').textContent = identity;
+            const nextName = levelIdentities[level + 1];
+            const nextEl = document.getElementById('level-next');
+            if (nextEl) nextEl.textContent = nextName ? `Next: ${nextName}` : '🌟 Max Level!';
         }
 
         function updateStreak() {
@@ -3981,11 +4597,42 @@ Thank you.`);
 
             localStorage.setItem('streak', streak);
             localStorage.setItem('lastVisit', today);
-            document.getElementById('streak-count').textContent = streak;
+            animateStreakCount(streak);
+            if (lastVisit === yesterday) streakSparkle();
 
             // Check streak badge
             if (streak >= 3 && !badges['streak']) {
                 unlockBadge('streak', 'On Fire! 🔥', 'You maintained a 3-day streak!');
+            }
+        }
+
+        function animateStreakCount(target) {
+            const el = document.getElementById('streak-count');
+            const start = parseInt(el.textContent) || 0;
+            if (start === target) { el.textContent = target; return; }
+            const duration = 600;
+            const startTime = performance.now();
+            function step(now) {
+                const progress = Math.min((now - startTime) / duration, 1);
+                el.textContent = Math.round(start + (target - start) * progress);
+                if (progress < 1) requestAnimationFrame(step);
+            }
+            requestAnimationFrame(step);
+        }
+
+        function streakSparkle() {
+            const display = document.querySelector('.streak-display');
+            const sparkles = ['✨', '⭐', '💛', '🌟'];
+            for (let i = 0; i < 6; i++) {
+                const s = document.createElement('span');
+                s.className = 'streak-sparkle';
+                s.textContent = sparkles[i % sparkles.length];
+                s.style.setProperty('--sx', (Math.random() * 60 - 30) + 'px');
+                s.style.left = (30 + Math.random() * 40) + '%';
+                s.style.top = (20 + Math.random() * 30) + '%';
+                s.style.animationDelay = (i * 0.1) + 's';
+                display.appendChild(s);
+                setTimeout(() => s.remove(), 1000);
             }
         }
 
@@ -4023,7 +4670,7 @@ Thank you.`);
             if (kindnessCount >= 3) unlockBadge('kind', 'Kind Soul! 💛', 'You added 3 kindness entries!');
 
             // Courage badge
-            if (challengeProgress.some(p => p > 0)) unlockBadge('courage', 'Courage Champ! 🦸', 'You completed a challenge!');
+            if (totalCouragePracticed > 0) unlockBadge('courage', 'Courage Champ! 🦸', 'You completed a challenge!');
 
             // Strong Voice badge
             if (podRecordings && podRecordings.length >= 3) unlockBadge('voice', 'Strong Voice! 🎙️', 'You recorded 3 practice sessions!');
@@ -4040,11 +4687,10 @@ Thank you.`);
         // Hook into existing functions to add XP
         const originalSaveMoodBase = saveMood;
         saveMood = function() {
+            const hadMood = selectedMood !== null;
             originalSaveMoodBase();
-            if (selectedMood) {
+            if (hadMood) {
                 addXP(20);
-                kindnessCount++;
-                localStorage.setItem('kindnessCount', kindnessCount);
                 checkBadges();
             }
         };
@@ -4088,16 +4734,11 @@ Thank you.`);
             }
         };
 
-        const originalCompleteChallengeBase = completeChallenge;
-        completeChallenge = function() {
-            const c = challenges[currentChallenge];
-            const wasBelowGoal = challengeProgress[currentChallenge] < c.goal;
-            originalCompleteChallengeBase();
-            if (wasBelowGoal) {
-                addXP(25);
-                checkBadges();
-                createConfetti();
-            }
+        const originalCompleteCourageChallenge = completeCourageChallenge;
+        completeCourageChallenge = function() {
+            originalCompleteCourageChallenge();
+            addXP(25);
+            checkBadges();
         };
 
         // Hook Practice Pod into gamification
@@ -4375,10 +5016,268 @@ You are enough. Right now. As you are.`
                 alert("📚 " + module.title + "\\n\\n" + module.content);
             }
         }
+
+        // --- Auth System ---
+        let currentUserData = null;
+
+        function showAuthScreen() {
+            document.getElementById('auth-screen').classList.remove('hidden');
+            document.getElementById('auth-error').textContent = '';
+        }
+
+        function hideAuthScreen() {
+            document.getElementById('auth-screen').classList.add('hidden');
+        }
+
+        function switchAuthTab(tab) {
+            document.getElementById('tab-login').classList.toggle('active', tab === 'login');
+            document.getElementById('tab-register').classList.toggle('active', tab === 'register');
+            document.getElementById('form-login').classList.toggle('active', tab === 'login');
+            document.getElementById('form-register').classList.toggle('active', tab === 'register');
+            document.getElementById('auth-error').textContent = '';
+        }
+
+        async function doLogin(e) {
+            e.preventDefault();
+            const username = document.getElementById('login-username').value;
+            const password = document.getElementById('login-password').value;
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username, password})
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    document.getElementById('auth-error').textContent = data.error || 'Login failed';
+                    return;
+                }
+                currentUserData = data;
+                hideAuthScreen();
+                updateAuthUI(true);
+                loadUserProgress();
+            } catch (err) {
+                document.getElementById('auth-error').textContent = 'Connection error. Try again.';
+            }
+        }
+
+        async function doRegister(e) {
+            e.preventDefault();
+            const username = document.getElementById('reg-username').value;
+            const email = document.getElementById('reg-email').value;
+            const password = document.getElementById('reg-password').value;
+            const password2 = document.getElementById('reg-password2').value;
+            const parentEmail = document.getElementById('reg-parent-email').value;
+
+            if (password !== password2) {
+                document.getElementById('auth-error').textContent = 'Passwords do not match';
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username, email, password, parent_email: parentEmail})
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    document.getElementById('auth-error').textContent = data.error || 'Registration failed';
+                    return;
+                }
+                currentUserData = data;
+                hideAuthScreen();
+                updateAuthUI(true);
+                migrateLocalStorageToServer();
+            } catch (err) {
+                document.getElementById('auth-error').textContent = 'Connection error. Try again.';
+            }
+        }
+
+        async function doLogout() {
+            await fetch('/api/auth/logout', {method: 'POST'});
+            currentUserData = null;
+            updateAuthUI(false);
+            showAuthScreen();
+        }
+
+        function updateAuthUI(loggedIn) {
+            const authArea = document.getElementById('header-auth');
+            if (loggedIn && currentUserData) {
+                authArea.innerHTML = '<div class="header-user-info">' +
+                    '<span>👋 ' + currentUserData.username + '</span>' +
+                    '<button class="header-logout-btn" onclick="doLogout()">Log Out</button>' +
+                    '</div>';
+            } else {
+                authArea.innerHTML = '';
+            }
+        }
+
+        async function checkAuth() {
+            try {
+                const res = await fetch('/api/auth/me');
+                if (res.ok) {
+                    currentUserData = await res.json();
+                    hideAuthScreen();
+                    updateAuthUI(true);
+                    loadUserProgress();
+                    return;
+                }
+            } catch (err) {}
+            showAuthScreen();
+        }
+
+        async function loadUserProgress() {
+            try {
+                const res = await fetch('/api/progress/load');
+                if (res.ok) {
+                    const data = await res.json();
+                    xp = data.xp || 0;
+                    level = data.level || 1;
+                    kindnessCount = data.kindnessCount || 0;
+                    totalCouragePracticed = data.couragePracticed || 0;
+                    if (data.badges && data.badges.length) {
+                        data.badges.forEach(b => {
+                            if (!unlockedBadges.includes(b)) unlockedBadges.push(b);
+                        });
+                    }
+                    updateXPDisplay();
+                    updateBadgesDisplay();
+                }
+            } catch (err) {}
+        }
+
+        let syncTimer = null;
+        function syncProgressToServer() {
+            if (!currentUserData) return;
+            clearTimeout(syncTimer);
+            syncTimer = setTimeout(async () => {
+                try {
+                    await fetch('/api/progress/sync', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            xp, level, badges: unlockedBadges,
+                            kindnessCount, couragePracticed: totalCouragePracticed
+                        })
+                    });
+                } catch (err) {}
+            }, 2000);
+        }
+
+        async function migrateLocalStorageToServer() {
+            const moods = JSON.parse(localStorage.getItem('moodHistory') || '[]');
+            const trustTeam = JSON.parse(localStorage.getItem('trustTeam') || '[]');
+            const progress = {
+                xp: parseInt(localStorage.getItem('xp') || '0'),
+                level: parseInt(localStorage.getItem('level') || '1'),
+                badges: JSON.parse(localStorage.getItem('unlockedBadges') || '[]'),
+                kindnessCount: parseInt(localStorage.getItem('kindnessCount') || '0'),
+                couragePracticed: parseInt(localStorage.getItem('totalCouragePracticed') || '0')
+            };
+            try {
+                await fetch('/api/migrate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({moods, trustTeam, progress})
+                });
+            } catch (err) {}
+        }
+
+        // Hook into gamification to sync progress after changes
+        const origAddXP = addXP;
+        addXP = function(amount) {
+            origAddXP(amount);
+            syncProgressToServer();
+        };
+
+        // Check auth on page load
+        checkAuth();
     </script>
+
+    <!-- Full-page Auth Screen -->
+    <div class="auth-screen" id="auth-screen">
+        <div class="auth-card">
+            <div class="auth-logo">
+                <img src="/static/buddy/buddy-static.png" alt="Buddy">
+                <h1>Buddy</h1>
+                <p>Where feelings matter and kindness grows</p>
+            </div>
+            <div class="auth-tabs">
+                <button class="auth-tab active" id="tab-login" onclick="switchAuthTab('login')">Log In</button>
+                <button class="auth-tab" id="tab-register" onclick="switchAuthTab('register')">Sign Up</button>
+            </div>
+            <div class="auth-error" id="auth-error"></div>
+            <form class="auth-form active" id="form-login" onsubmit="doLogin(event)">
+                <input class="auth-input" type="text" id="login-username" placeholder="Username or email" required>
+                <input class="auth-input" type="password" id="login-password" placeholder="Password" required>
+                <button class="auth-btn" type="submit">Log In</button>
+            </form>
+            <form class="auth-form" id="form-register" onsubmit="doRegister(event)">
+                <input class="auth-input" type="text" id="reg-username" placeholder="Choose a username" required>
+                <input class="auth-input" type="email" id="reg-email" placeholder="Email address" required>
+                <input class="auth-input" type="password" id="reg-password" placeholder="Password (6+ characters)" required minlength="6">
+                <input class="auth-input" type="password" id="reg-password2" placeholder="Confirm password" required>
+                <input class="auth-input" type="email" id="reg-parent-email" placeholder="Parent email (optional)">
+                <button class="auth-btn" type="submit">Create Account</button>
+            </form>
+        </div>
+    </div>
 </body>
 </html>
 """
+
+# --- Auth API Routes ---
+
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    data = request.json
+    username = data.get('username', '').strip()
+    email = data.get('email', '').strip().lower()
+    password = data.get('password', '')
+    parent_email = data.get('parent_email', '').strip() or None
+
+    if not username or not email or not password:
+        return jsonify({'error': 'Username, email, and password are required'}), 400
+    if len(password) < 6:
+        return jsonify({'error': 'Password must be at least 6 characters'}), 400
+    if User.query.filter((User.username == username) | (User.email == email)).first():
+        return jsonify({'error': 'Username or email already taken'}), 400
+
+    user = User(
+        username=username,
+        email=email,
+        password_hash=generate_password_hash(password),
+        parent_email=parent_email
+    )
+    db.session.add(user)
+    db.session.commit()
+    login_user(user)
+    return jsonify({'id': user.id, 'username': user.username, 'email': user.email})
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    data = request.json
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+
+    user = User.query.filter((User.username == username) | (User.email == username)).first()
+    if not user or not check_password_hash(user.password_hash, password):
+        return jsonify({'error': 'Invalid username or password'}), 401
+
+    login_user(user)
+    return jsonify({'id': user.id, 'username': user.username, 'email': user.email})
+
+@app.route('/api/auth/logout', methods=['POST'])
+def logout():
+    logout_user()
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/auth/me')
+def me():
+    if current_user.is_authenticated:
+        return jsonify({'id': current_user.id, 'username': current_user.username, 'email': current_user.email})
+    return jsonify({'error': 'Not logged in'}), 401
 
 @app.route('/')
 def home():
@@ -4388,6 +5287,10 @@ def home():
 def save_mood():
     data = request.json
     mood_entries.append(data)
+    if current_user.is_authenticated:
+        entry = MoodEntry(user_id=current_user.id, mood=data.get('mood', ''), note=data.get('note', ''))
+        db.session.add(entry)
+        db.session.commit()
     return jsonify({'status': 'success', 'message': 'Mood saved'})
 
 @app.route('/api/chat', methods=['POST'])
@@ -4419,12 +5322,20 @@ def chat():
     # Save assistant response to history
     conversation_history.append({"role": "assistant", "content": response})
     chat_history.append({'user': user_message, 'ai': response})
+    if current_user.is_authenticated:
+        db.session.add(ChatMessage(user_id=current_user.id, role='user', content=user_message))
+        db.session.add(ChatMessage(user_id=current_user.id, role='ai', content=response))
+        db.session.commit()
     return jsonify({'response': response})
 
 @app.route('/api/report', methods=['POST'])
 def submit_report():
     data = request.json
     reports.append(data)
+    if current_user.is_authenticated:
+        report = Report(user_id=current_user.id, report_text=json.dumps(data))
+        db.session.add(report)
+        db.session.commit()
     return jsonify({'status': 'success', 'message': 'Report submitted'})
 
 @app.route('/api/kindness-response', methods=['POST'])
@@ -4475,10 +5386,144 @@ Keep it SHORT (under 30 words). Be real, not cheesy."""
             "Kindness grows when you notice it. Thanks for sharing.",
             "That's the kind of thing that sticks in someone's memory."
         ]
-        import random
         response = random.choice(fallbacks)
 
+    if current_user.is_authenticated:
+        entry = KindnessEntry(user_id=current_user.id, entry_text=entry_text, ai_response=response)
+        db.session.add(entry)
+        db.session.commit()
+
     return jsonify({'response': response})
+
+# --- Data API Routes ---
+
+@app.route('/api/progress/sync', methods=['POST'])
+def sync_progress():
+    if not current_user.is_authenticated:
+        return jsonify({'error': 'Not logged in'}), 401
+    data = request.json
+    progress = UserProgress.query.filter_by(user_id=current_user.id).first()
+    if not progress:
+        progress = UserProgress(user_id=current_user.id)
+        db.session.add(progress)
+    progress.xp = data.get('xp', progress.xp)
+    progress.level = data.get('level', progress.level)
+    progress.badges_json = json.dumps(data.get('badges', []))
+    progress.kindness_count = data.get('kindnessCount', progress.kindness_count)
+    progress.courage_practiced = data.get('couragePracticed', progress.courage_practiced)
+    progress.last_synced = datetime.utcnow()
+    db.session.commit()
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/progress/load')
+def load_progress():
+    if not current_user.is_authenticated:
+        return jsonify({'error': 'Not logged in'}), 401
+    progress = UserProgress.query.filter_by(user_id=current_user.id).first()
+    if not progress:
+        return jsonify({'xp': 0, 'level': 1, 'badges': [], 'kindnessCount': 0, 'couragePracticed': 0})
+    return jsonify({
+        'xp': progress.xp,
+        'level': progress.level,
+        'badges': json.loads(progress.badges_json or '[]'),
+        'kindnessCount': progress.kindness_count,
+        'couragePracticed': progress.courage_practiced
+    })
+
+@app.route('/api/trust-team', methods=['GET'])
+def get_trust_team():
+    if not current_user.is_authenticated:
+        return jsonify({'error': 'Not logged in'}), 401
+    members = TrustTeamMember.query.filter_by(user_id=current_user.id).all()
+    return jsonify([{
+        'id': m.id, 'name': m.name, 'relationship': m.relationship,
+        'contact': m.contact, 'emoji': m.emoji
+    } for m in members])
+
+@app.route('/api/trust-team', methods=['POST'])
+def save_trust_team():
+    if not current_user.is_authenticated:
+        return jsonify({'error': 'Not logged in'}), 401
+    data = request.json
+    member = TrustTeamMember(
+        user_id=current_user.id, name=data['name'],
+        relationship=data['relationship'],
+        contact=data.get('contact', ''), emoji=data.get('emoji', '👤')
+    )
+    db.session.add(member)
+    db.session.commit()
+    return jsonify({'id': member.id, 'name': member.name})
+
+@app.route('/api/trust-team/<int:member_id>', methods=['DELETE'])
+def delete_trust_team(member_id):
+    if not current_user.is_authenticated:
+        return jsonify({'error': 'Not logged in'}), 401
+    member = TrustTeamMember.query.filter_by(id=member_id, user_id=current_user.id).first()
+    if not member:
+        return jsonify({'error': 'Not found'}), 404
+    db.session.delete(member)
+    db.session.commit()
+    return jsonify({'status': 'ok'})
+
+@app.route('/api/send-alert', methods=['POST'])
+def send_alert():
+    if not current_user.is_authenticated:
+        return jsonify({'error': 'Not logged in'}), 401
+    data = request.json
+    to_email = data.get('email', '')
+    subject = data.get('subject', 'Buddy App Alert')
+    body = data.get('body', '')
+
+    api_key = os.getenv('SENDGRID_API_KEY', '')
+    from_email = os.getenv('SENDGRID_FROM_EMAIL', '')
+    if not api_key or api_key == 'your-sendgrid-api-key-here':
+        return jsonify({'error': 'Email not configured. Ask a parent to set up SendGrid.'}), 400
+
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+        message = Mail(from_email=from_email, to_emails=to_email, subject=subject, plain_text_content=body)
+        sg = SendGridAPIClient(api_key)
+        sg.send(message)
+        return jsonify({'status': 'ok', 'message': 'Alert sent!'})
+    except Exception as e:
+        print(f"SendGrid error: {e}")
+        return jsonify({'error': 'Failed to send email'}), 500
+
+@app.route('/api/migrate', methods=['POST'])
+def migrate_data():
+    if not current_user.is_authenticated:
+        return jsonify({'error': 'Not logged in'}), 401
+    data = request.json
+
+    # Migrate mood entries
+    for mood in data.get('moods', []):
+        entry = MoodEntry(user_id=current_user.id, mood=mood.get('mood', ''), note=mood.get('note', ''))
+        db.session.add(entry)
+
+    # Migrate trust team
+    for member in data.get('trustTeam', []):
+        m = TrustTeamMember(
+            user_id=current_user.id, name=member.get('name', ''),
+            relationship=member.get('relationship', ''),
+            contact=member.get('contact', ''), emoji=member.get('emoji', '👤')
+        )
+        db.session.add(m)
+
+    # Migrate progress
+    progress = UserProgress.query.filter_by(user_id=current_user.id).first()
+    if not progress:
+        progress = UserProgress(user_id=current_user.id)
+        db.session.add(progress)
+    prog = data.get('progress', {})
+    progress.xp = prog.get('xp', 0)
+    progress.level = prog.get('level', 1)
+    progress.badges_json = json.dumps(prog.get('badges', []))
+    progress.kindness_count = prog.get('kindnessCount', 0)
+    progress.courage_practiced = prog.get('couragePracticed', 0)
+
+    db.session.commit()
+    return jsonify({'status': 'ok', 'message': 'Data migrated!'})
 
 @app.route('/api/stats')
 def get_stats():
@@ -4489,12 +5534,15 @@ def get_stats():
     })
 
 if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
     print("\n" + "="*60)
     print("🛡️  ANTI-BULLYING SUPPORT APP - WORKING NOW!")
     print("="*60)
     print("📱 Open in browser: http://localhost:8080")
     print("✅ All features working immediately")
+    print("🔐 User accounts enabled (SQLite)")
     print("💙 Safe space for children and teens")
     print("="*60 + "\n")
-    
+
     app.run(host='0.0.0.0', port=8080, debug=True)
