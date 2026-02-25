@@ -3838,18 +3838,32 @@ Getting help is smart, not weak. You deserve support! 💜`;
             sendEmailTo(member.name, member.email);
         }
 
-        function sendEmailTo(name, email) {
-            const subject = encodeURIComponent('I Need to Talk');
-            const body = encodeURIComponent(`Hi ${name},
+        async function sendEmailTo(name, email) {
+            const subject = 'I Need to Talk';
+            const body = `Hi ${name},
 
 I need to talk to you about something important.
 
 Something happened and I feel a bit worried/upset.
 Can we talk today or soon?
 
-Thank you.`);
+Thank you.`;
 
-            window.location.href = `mailto:${email}?subject=${subject}&body=${body}`;
+            try {
+                const res = await fetch('/api/send-alert', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({email, subject, body})
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    alert('Email sent to ' + name + '! They will see your message soon.');
+                } else {
+                    alert(data.error || 'Could not send email right now.');
+                }
+            } catch (err) {
+                alert('Could not send email. Check your connection.');
+            }
         }
 
         function addTrustMember() {
