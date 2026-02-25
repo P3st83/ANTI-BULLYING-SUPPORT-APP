@@ -1,7 +1,7 @@
 flask==2.3.3
 flask-login==0.6.3
 flask-sqlalchemy==3.1.1
-sendgrid==6.10.0
+requests==2.32.3
 openai==1.109.1
 python-dotenv==1.1.1
 gunicorn==21.2.0

@@ -5474,20 +5474,24 @@ def send_alert():
     subject = data.get('subject', 'Buddy App Alert')
     body = data.get('body', '')
 
-    api_key = os.getenv('SENDGRID_API_KEY', '')
-    from_email = os.getenv('SENDGRID_FROM_EMAIL', '')
-    if not api_key or api_key == 'your-sendgrid-api-key-here':
-        return jsonify({'error': 'Email not configured. Ask a parent to set up SendGrid.'}), 400
+    api_key = os.getenv('BREVO_API_KEY', '')
+    from_email = os.getenv('BREVO_FROM_EMAIL', '')
+    if not api_key:
+        return jsonify({'error': 'Email not configured.'}), 400
 
     try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail
-        message = Mail(from_email=from_email, to_emails=to_email, subject=subject, plain_text_content=body)
-        sg = SendGridAPIClient(api_key)
-        sg.send(message)
-        return jsonify({'status': 'ok', 'message': 'Alert sent!'})
+        import requests as req
+        res = req.post('https://api.brevo.com/v3/smtp/email', json={
+            'sender': {'email': from_email},
+            'to': [{'email': to_email}],
+            'subject': subject,
+            'textContent': body
+        }, headers={'api-key': api_key, 'Content-Type': 'application/json'})
+        if res.status_code in (200, 201):
+            return jsonify({'status': 'ok', 'message': 'Alert sent!'})
+        return jsonify({'error': 'Email delivery failed'}), 500
     except Exception as e:
-        print(f"SendGrid error: {e}")
+        print(f"Brevo error: {e}")
         return jsonify({'error': 'Failed to send email'}), 500
 
 @app.route('/api/migrate', methods=['POST'])
