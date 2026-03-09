@@ -19,7 +19,10 @@ load_dotenv()
 
 app = Flask(__name__, static_folder='static')
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-change-in-production')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///buddy.db')
+db_url = os.getenv('DATABASE_URL', 'sqlite:///buddy.db')
+if db_url.startswith('postgres://'):
+    db_url = db_url.replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
@@ -3882,6 +3885,15 @@ Thank you.`;
             trustTeam.push(member);
             localStorage.setItem('trustTeam', JSON.stringify(trustTeam));
 
+            // Save to server if logged in
+            if (currentUserData) {
+                fetch('/api/trust-team', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name, relationship: role, contact: email, emoji: avatars[role] || '💙'})
+                }).catch(() => {});
+            }
+
             renderTrustTeam();
 
             document.getElementById('new-trust-name').value = '';
@@ -5157,6 +5169,21 @@ You are enough. Right now. As you are.`
                     }
                     updateXPDisplay();
                     updateBadgesDisplay();
+                }
+            } catch (err) {}
+            // Load trust team from server
+            try {
+                const res = await fetch('/api/trust-team');
+                if (res.ok) {
+                    const members = await res.json();
+                    if (members.length > 0) {
+                        trustTeam = members.map(m => ({
+                            name: m.name, role: m.relationship,
+                            avatar: m.emoji || '💙', email: m.contact || ''
+                        }));
+                        localStorage.setItem('trustTeam', JSON.stringify(trustTeam));
+                        renderTrustTeam();
+                    }
                 }
             } catch (err) {}
         }
