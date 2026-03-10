@@ -857,32 +857,6 @@ HTML_TEMPLATE = """
         }
         .resource h3 { color: #D35400; margin-bottom: 10px; font-weight: 800; }
 
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 15px;
-            margin: 20px 0;
-        }
-        .stat {
-            text-align: center;
-            padding: 20px 10px;
-            background: linear-gradient(135deg, #89B4FA, #5B9BF0);
-            border-radius: 20px;
-            color: white;
-            transition: all 0.3s ease;
-        }
-        .stat:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 12px 25px rgba(0,0,0,0.12);
-        }
-        .stat-icon { font-size: 1.6em; margin-bottom: 4px; }
-        .stat-micro { font-size: 0.7em; opacity: 0.85; margin-top: 4px; font-weight: 600; }
-        .stat-number {
-            font-size: 2.5em;
-            font-weight: 900;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
-        }
-
         .close-btn {
             position: absolute;
             top: 15px;
@@ -1844,34 +1818,6 @@ HTML_TEMPLATE = """
             border-color: #6C5CE7;
             box-shadow: 0 0 0 2px rgba(108, 92, 231, 0.3);
         }
-        .dashboard-badges {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            justify-content: center;
-            margin: 15px 0;
-        }
-        .dashboard-badge {
-            width: 55px;
-            height: 55px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 24px;
-            background: linear-gradient(145deg, #E0E0E0, #BDBDBD);
-            border: 3px solid #9E9E9E;
-            opacity: 0.4;
-            filter: grayscale(100%);
-            transition: all 0.3s ease;
-        }
-        .dashboard-badge.earned {
-            background: linear-gradient(145deg, #FFE66D, #F39C12);
-            border-color: #E67E22;
-            opacity: 1;
-            filter: none;
-            box-shadow: 0 4px 15px rgba(243, 156, 18, 0.5);
-        }
         .dashboard-section-title {
             font-weight: 800;
             color: #6C5CE7;
@@ -2040,6 +1986,62 @@ HTML_TEMPLATE = """
             cursor: pointer;
         }
         .header-logout-btn:hover { background: #B2BEC3; color: white; }
+
+        /* Custom Popup */
+        .buddy-popup-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.4);
+            z-index: 20000;
+            justify-content: center;
+            align-items: center;
+            animation: popupFadeIn 0.2s ease;
+        }
+        .buddy-popup-overlay.active { display: flex; }
+        @keyframes popupFadeIn { from { opacity: 0; } to { opacity: 1; } }
+        @keyframes popupSlideIn { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+        .buddy-popup {
+            background: white;
+            border-radius: 24px;
+            padding: 28px 24px 20px;
+            width: 90%;
+            max-width: 380px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.2);
+            text-align: center;
+            animation: popupSlideIn 0.25s ease;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .buddy-popup-icon { font-size: 2.5em; margin-bottom: 12px; }
+        .buddy-popup-title {
+            font-size: 1.2em;
+            font-weight: 800;
+            color: #2D3436;
+            margin-bottom: 10px;
+        }
+        .buddy-popup-msg {
+            color: #636E72;
+            font-size: 14px;
+            line-height: 1.6;
+            margin-bottom: 20px;
+            white-space: pre-line;
+        }
+        .buddy-popup-btn {
+            padding: 12px 32px;
+            background: linear-gradient(135deg, #6C5CE7, #A29BFE);
+            color: white;
+            border: none;
+            border-radius: 16px;
+            font-family: inherit;
+            font-weight: 700;
+            font-size: 15px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        .buddy-popup-btn:hover { transform: scale(1.05); }
+        .buddy-popup-btn.success { background: linear-gradient(135deg, #00B894, #55EFC4); color: white; }
+        .buddy-popup-btn.warning { background: linear-gradient(135deg, #FDCB6E, #F39C12); color: white; }
     </style>
 </head>
 <body>
@@ -2407,27 +2409,6 @@ HTML_TEMPLATE = """
                     </div>
                 </div>
 
-                <!-- Stats Grid -->
-                <div class="stats">
-                    <div class="stat">
-                        <div class="stat-icon">💛</div>
-                        <div class="stat-number" id="mood-count">0</div>
-                        <div>Feelings</div>
-                        <div class="stat-micro" id="mood-micro">Share how you feel</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-icon">💬</div>
-                        <div class="stat-number" id="chat-count">0</div>
-                        <div>Chats</div>
-                        <div class="stat-micro" id="chat-micro">Talk to Buddy</div>
-                    </div>
-                    <div class="stat">
-                        <div class="stat-icon">🛡️</div>
-                        <div class="stat-number" id="report-count">0</div>
-                        <div>Reports</div>
-                        <div class="stat-micro" id="report-micro">Speak up bravely</div>
-                    </div>
-                </div>
                 <p id="journey-footer" style="text-align: center; margin-top: 20px; color: #7C3AED; font-weight: 600;">
                     Your heart story is just beginning 💛
                 </p>
@@ -2763,29 +2744,6 @@ HTML_TEMPLATE = """
                     <!-- Filled by JS -->
                 </div>
 
-                <!-- Badges Earned -->
-                <div class="dashboard-section-title">🏆 Badges Earned</div>
-                <div class="dashboard-badges" id="dashboard-badges">
-                    <div class="dashboard-badge" id="dash-badge-first-mood" title="First Feelings">😊</div>
-                    <div class="dashboard-badge" id="dash-badge-chatty" title="Chatty Friend">💬</div>
-                    <div class="dashboard-badge" id="dash-badge-brave" title="Brave Heart">🦁</div>
-                    <div class="dashboard-badge" id="dash-badge-kind" title="Kind Soul">💛</div>
-                    <div class="dashboard-badge" id="dash-badge-streak" title="On Fire">🔥</div>
-                    <div class="dashboard-badge" id="dash-badge-courage" title="Courage Champ">🦸</div>
-                    <div class="dashboard-badge" id="dash-badge-voice" title="Strong Voice">🎙️</div>
-                </div>
-
-                <!-- Level & XP -->
-                <div class="level-container" style="margin-top: 20px;">
-                    <div class="level-header">
-                        <span class="level-title">Your Level</span>
-                        <span class="level-number" id="dash-level">Level 1</span>
-                    </div>
-                    <div class="xp-bar">
-                        <div class="xp-fill" id="dash-xp-fill" style="width: 0%"></div>
-                    </div>
-                    <div class="xp-text"><span id="dash-xp-current">0</span> / <span id="dash-xp-needed">100</span> XP</div>
-                </div>
             </div>
 
             <!-- Learn & Grow 2 - Quick Lessons -->
@@ -2844,6 +2802,22 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
+        // ============================================
+        // CUSTOM POPUP SYSTEM
+        // ============================================
+        function showPopup(msg, icon, title, btnClass) {
+            const overlay = document.getElementById('buddy-popup');
+            document.getElementById('buddy-popup-icon').textContent = icon || '💙';
+            document.getElementById('buddy-popup-title').textContent = title || '';
+            document.getElementById('buddy-popup-msg').textContent = msg;
+            const btn = document.getElementById('buddy-popup-btn');
+            btn.className = 'buddy-popup-btn' + (btnClass ? ' ' + btnClass : '');
+            overlay.classList.add('active');
+        }
+        function closeBuddyPopup() {
+            document.getElementById('buddy-popup').classList.remove('active');
+        }
+
         // ============================================
         // SIDEBAR NAVIGATION
         // ============================================
@@ -3010,26 +2984,6 @@ HTML_TEMPLATE = """
             }
         };
 
-        // Count-up animation helper
-        function animateCount(el, target) {
-            if (target === 0) { el.textContent = '0'; return; }
-            const duration = 800;
-            const start = performance.now();
-            function step(now) {
-                const p = Math.min((now - start) / duration, 1);
-                el.textContent = Math.round(target * p);
-                if (p < 1) requestAnimationFrame(step);
-            }
-            requestAnimationFrame(step);
-        }
-
-        // Update stats on load with count-up + micro text
-        animateCount(document.getElementById('mood-count'), moodCount);
-        animateCount(document.getElementById('chat-count'), chatCount);
-        animateCount(document.getElementById('report-count'), reportCount);
-        if (moodCount > 0) document.getElementById('mood-micro').textContent = `Shared ${moodCount} time${moodCount !== 1 ? 's' : ''} 💛`;
-        if (chatCount > 0) document.getElementById('chat-micro').textContent = `${chatCount} conversation${chatCount !== 1 ? 's' : ''} 💬`;
-        if (reportCount > 0) document.getElementById('report-micro').textContent = `${reportCount} brave step${reportCount !== 1 ? 's' : ''} 🛡️`;
         // Dynamic footer
         if (moodCount + chatCount + reportCount > 0) {
             document.getElementById('journey-footer').textContent = 'Look how far you\\'ve come already 🌟';
@@ -3054,7 +3008,7 @@ HTML_TEMPLATE = """
 
         function saveMood() {
             if (!selectedMood) {
-                alert('Please select a mood first!');
+                showPopup('Please select a mood first!', '🎭', 'Pick a Mood');
                 return;
             }
 
@@ -3081,8 +3035,7 @@ HTML_TEMPLATE = """
 
             moodCount++;
             localStorage.setItem('moodCount', moodCount);
-            animateCount(document.getElementById('mood-count'), moodCount);
-            document.getElementById('mood-micro').textContent = `Shared ${moodCount} time${moodCount !== 1 ? 's' : ''} 💛`;
+            if (typeof updateProgressDashboard === 'function') updateProgressDashboard();
 
             // Show Buddy's response based on mood
             const moodData = moodResponses[selectedMood.mood];
@@ -3126,7 +3079,7 @@ HTML_TEMPLATE = """
                 message = "Let's figure this out together. What's the main thing that's confusing you? Sometimes saying it out loud (or typing it) helps make it clearer.";
             }
 
-            alert(message);
+            showPopup(message, selectedMood ? '💙' : '💭', 'Buddy Says');
             document.getElementById('mood-response').classList.add('hidden');
         }
 
@@ -3230,8 +3183,7 @@ HTML_TEMPLATE = """
                 
                 chatCount++;
                 localStorage.setItem('chatCount', chatCount);
-                animateCount(document.getElementById('chat-count'), chatCount);
-                document.getElementById('chat-micro').textContent = `${chatCount} conversation${chatCount !== 1 ? 's' : ''} 💬`;
+                if (typeof updateProgressDashboard === 'function') updateProgressDashboard();
             });
         }
 
@@ -3260,7 +3212,7 @@ HTML_TEMPLATE = """
             const anonymous = document.getElementById('report-anonymous').checked;
 
             if (!title || !description || !location) {
-                alert('Please fill in all required fields');
+                showPopup('Please fill in all required fields', '📝', 'Missing Info');
                 return;
             }
 
@@ -3309,7 +3261,7 @@ From: ${reporterName}`);
             }
 
             if (noEmailNames.length > 0) {
-                alert(`📧 Remember to talk to ${noEmailNames.join(', ')} about this!\\n\\nTip: Add their email in the Trust Team section so you can send them a message next time.`);
+                showPopup(`Remember to talk to ${noEmailNames.join(', ')} about this!\n\nTip: Add their email in the Trust Team section so you can send them a message next time.`, '📧', 'Talk to Someone');
             }
 
             // Clear form
@@ -3322,8 +3274,6 @@ From: ${reporterName}`);
             document.getElementById('report-success').classList.remove('hidden');
             reportCount++;
             localStorage.setItem('reportCount', reportCount);
-            animateCount(document.getElementById('report-count'), reportCount);
-            document.getElementById('report-micro').textContent = `${reportCount} brave step${reportCount !== 1 ? 's' : ''} 🛡️`;
 
             setTimeout(() => {
                 document.getElementById('report-success').classList.add('hidden');
@@ -3357,7 +3307,7 @@ From: ${reporterName}`);
                 confidence: "Building confidence: 1) Practice positive self-talk, 2) Try new activities, 3) Celebrate small wins, 4) Surround yourself with supportive people, 5) Remember your strengths.",
                 bystander: "How to help: 1) Don't join in or laugh, 2) Tell the bully to stop if it's safe, 3) Get help from an adult, 4) Support the person being bullied, 5) Include them in your activities."
             };
-            alert(resources[type]);
+            showPopup(resources[type], '📖', 'Quick Resources');
         }
 
         // ============ KINDNESS JOURNAL ============
@@ -3408,7 +3358,7 @@ From: ${reporterName}`);
                         }, 1000);
                     })
                     .catch(err => {
-                        alert('Could not access microphone. Please allow microphone access and try again!');
+                        showPopup('Could not access microphone. Please allow microphone access and try again!', '🎤', 'Microphone Access');
                     });
             } else {
                 // Stop recording
@@ -3423,7 +3373,7 @@ From: ${reporterName}`);
             }
         }
 
-        function addKindnessVoiceEntry(audioUrl) {
+        async function addKindnessVoiceEntry(audioUrl) {
             const date = new Date().toLocaleDateString();
             const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
             const duration = kindnessRecSeconds;
@@ -3446,6 +3396,26 @@ From: ${reporterName}`);
 
             document.getElementById('kindness-success').classList.remove('hidden');
             setTimeout(() => document.getElementById('kindness-success').classList.add('hidden'), 3000);
+
+            // Get Buddy's AI response to the voice kindness entry
+            const buddyResponse = document.getElementById('kindness-buddy-response');
+            const buddyText = document.getElementById('kindness-buddy-text');
+            buddyText.textContent = '✨ Buddy is thinking...';
+            buddyResponse.classList.remove('hidden');
+
+            try {
+                const response = await fetch('/api/kindness-response', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ entry: 'I recorded a voice message about something kind I did today.' })
+                });
+                const data = await response.json();
+                buddyText.textContent = data.response;
+            } catch (error) {
+                buddyText.textContent = "That's really thoughtful of you. Little acts of kindness make the world brighter!";
+            }
+
+            setTimeout(() => buddyResponse.classList.add('hidden'), 10000);
         }
 
         let currentKindnessAudio = null;
@@ -3478,7 +3448,7 @@ From: ${reporterName}`);
             const input = document.getElementById('kindness-input');
             const text = input.value.trim();
             if (!text) {
-                alert('Please write something kind first!');
+                showPopup('Please write something kind first!', '✍️', 'Kindness Journal');
                 return;
             }
 
@@ -3819,7 +3789,7 @@ Getting help is smart, not weak. You deserve support! 💜`;
                     sendEmailTo(member.name, member.email);
                 }
             } else {
-                alert(message);
+                showPopup(message, '💬', 'Talk to Someone');
             }
         }
 
@@ -3828,13 +3798,13 @@ Getting help is smart, not weak. You deserve support! 💜`;
             const index = select.value;
 
             if (!index) {
-                alert('Please select someone from your Trust Team first!');
+                showPopup('Please select someone from your Trust Team first!', '👥', 'Trust Team');
                 return;
             }
 
             const member = trustTeam[parseInt(index)];
             if (!member.email) {
-                alert(`${member.name} doesn't have an email address saved yet.\\n\\nYou can add their email by clicking the ➕ Add to My Team button below!`);
+                showPopup(`${member.name} doesn't have an email address saved yet.\n\nYou can add their email by clicking the Add to My Team button below!`, '📧', 'No Email');
                 return;
             }
 
@@ -3860,12 +3830,12 @@ Thank you.`;
                 });
                 const data = await res.json();
                 if (res.ok) {
-                    alert('Email sent to ' + name + '! They will see your message soon.');
+                    showPopup('Email sent to ' + name + '! They will see your message soon.', '✅', 'Email Sent', 'success');
                 } else {
-                    alert(data.error || 'Could not send email right now.');
+                    showPopup(data.error || 'Could not send email right now.', '⚠️', 'Email Error', 'warning');
                 }
             } catch (err) {
-                alert('Could not send email. Check your connection.');
+                showPopup('Could not send email. Check your connection.', '⚠️', 'Connection Error', 'warning');
             }
         }
 
@@ -3875,7 +3845,7 @@ Thank you.`;
             const role = document.getElementById('new-trust-role').value;
 
             if (!name) {
-                alert('Please enter a name!');
+                showPopup('Please enter a name!', '✏️', 'Missing Name');
                 return;
             }
 
@@ -3898,7 +3868,7 @@ Thank you.`;
 
             document.getElementById('new-trust-name').value = '';
             document.getElementById('new-trust-email').value = '';
-            alert(`${member.name} has been added to your Trust Team! 💚${email ? '\\nYou can now email them directly!' : ''}`);
+            showPopup(`${member.name} has been added to your Trust Team!${email ? ' You can now email them directly!' : ''}`, '💚', 'Team Updated', 'success');
         }
 
         // Initialize trust team and courage builder on page load
@@ -4136,8 +4106,13 @@ Thank you.`;
         let currentChallengeIndex = parseInt(localStorage.getItem('currentChallengeIndex') || '0');
         let courageMeter = parseInt(localStorage.getItem('courageMeter') || '10');
         let totalCouragePracticed = parseInt(localStorage.getItem('totalCouragePracticed') || '0');
+        let courageUnlockedLevel = parseInt(localStorage.getItem('courageUnlockedLevel') || '1');
 
         function selectCourageLevel(level) {
+            if (level > courageUnlockedLevel) {
+                showPopup(`Complete all weeks in the current level first to unlock this one!`, '🔒', 'Level Locked');
+                return;
+            }
             currentCourageLevel = level;
             currentCourageWeek = 1;
             currentChallengeIndex = 0;
@@ -4147,9 +4122,15 @@ Thank you.`;
 
             // Update level buttons
             document.querySelectorAll('.courage-level').forEach(el => {
+                const lvl = parseInt(el.dataset.level);
                 el.classList.remove('active');
-                if (parseInt(el.dataset.level) === level) {
-                    el.classList.add('active');
+                if (lvl === level) el.classList.add('active');
+                if (lvl > courageUnlockedLevel) {
+                    el.style.opacity = '0.4';
+                    el.style.cursor = 'not-allowed';
+                } else {
+                    el.style.opacity = '1';
+                    el.style.cursor = 'pointer';
                 }
             });
 
@@ -4234,6 +4215,7 @@ Thank you.`;
             totalCouragePracticed++;
             localStorage.setItem('courageMeter', courageMeter);
             localStorage.setItem('totalCouragePracticed', totalCouragePracticed);
+            if (typeof updateProgressDashboard === 'function') updateProgressDashboard();
 
             // Show buddy's encouraging response
             const response = buddyResponses[Math.floor(Math.random() * buddyResponses.length)];
@@ -4245,6 +4227,40 @@ Thank you.`;
 
             updateCourageMeter();
             createMiniConfetti();
+
+            // Auto-advance: challenge → week → level
+            const level = courageLevels[currentCourageLevel];
+            const week = level.weeks[currentCourageWeek];
+            if (currentChallengeIndex < week.challenges.length - 1) {
+                // Next challenge in this week
+                currentChallengeIndex++;
+                localStorage.setItem('currentChallengeIndex', currentChallengeIndex);
+                setTimeout(() => updateCourageChallenge(), 1500);
+            } else if (currentCourageWeek < 3) {
+                // Next week in this level
+                currentCourageWeek++;
+                currentChallengeIndex = 0;
+                localStorage.setItem('currentCourageWeek', currentCourageWeek);
+                localStorage.setItem('currentChallengeIndex', 0);
+                setTimeout(() => {
+                    updateWeekButtons();
+                    updateCourageChallenge();
+                    showPopup('Week complete! Moving to ' + level.weeks[currentCourageWeek].name, '🎉', 'Next Week!', 'success');
+                }, 1500);
+            } else if (currentCourageLevel < 5) {
+                // Unlock next level
+                courageUnlockedLevel = currentCourageLevel + 1;
+                localStorage.setItem('courageUnlockedLevel', courageUnlockedLevel);
+                const nextLevelName = courageLevels[courageUnlockedLevel].name || 'next level';
+                setTimeout(() => {
+                    selectCourageLevel(courageUnlockedLevel);
+                    showPopup('You completed all of ' + level.name + '! ' + nextLevelName + ' is now unlocked!', '🏆', 'Level Complete!', 'success');
+                }, 1500);
+            } else {
+                setTimeout(() => {
+                    showPopup('You completed ALL courage levels! You are a true Courage Hero!', '🦸', 'COURAGE HERO!', 'success');
+                }, 1500);
+            }
         }
 
         function updateCourageMeter() {
@@ -4405,7 +4421,7 @@ Thank you.`;
                         }, 1000);
                     })
                     .catch(err => {
-                        alert('Could not access microphone. Please allow microphone access and try again!');
+                        showPopup('Could not access microphone. Please allow microphone access and try again!', '🎤', 'Microphone Access');
                     });
             } else {
                 podMediaRecorder.stop();
@@ -4582,7 +4598,7 @@ Thank you.`;
                 level++;
                 localStorage.setItem('level', level);
                 const lvlName = levelIdentities[level] || 'Heart Hero';
-                alert(`🎉 LEVEL UP! You're now a ${lvlName}! Keep being amazing!`);
+                showPopup(`You're now a ${lvlName}! Keep being amazing!`, '🎉', 'LEVEL UP!', 'success');
                 createConfetti();
             }
 
@@ -4675,7 +4691,7 @@ Thank you.`;
 
             // Show unlock notification
             setTimeout(() => {
-                alert(`🎖️ BADGE UNLOCKED!\\n\\n${title}\\n${description}`);
+                showPopup(`${title}\n\n${description}`, '🎖️', 'BADGE UNLOCKED!', 'success');
                 createConfetti();
             }, 500);
 
@@ -4757,6 +4773,7 @@ Thank you.`;
                 localStorage.setItem('kindnessCount', kindnessCount);
                 checkBadges();
                 createMiniConfetti();
+                if (typeof updateProgressDashboard === 'function') updateProgressDashboard();
             }
         };
 
@@ -4795,21 +4812,6 @@ Thank you.`;
 
             // Count courage practiced
             document.getElementById('dash-challenge-count').textContent = totalCouragePracticed;
-
-            // Update level and XP
-            document.getElementById('dash-level').textContent = `Level ${level}`;
-            const xpNeeded = getXPForLevel(level);
-            document.getElementById('dash-xp-current').textContent = xp;
-            document.getElementById('dash-xp-needed').textContent = xpNeeded;
-            document.getElementById('dash-xp-fill').style.width = `${(xp / xpNeeded) * 100}%`;
-
-            // Update badges
-            Object.keys(badges).forEach(badgeId => {
-                const dashBadge = document.getElementById(`dash-badge-${badgeId}`);
-                if (dashBadge && badges[badgeId]) {
-                    dashBadge.classList.add('earned');
-                }
-            });
 
             // Update mood chart
             updateMoodChart();
@@ -5039,7 +5041,7 @@ You are enough. Right now. As you are.`
         function openLearnModule(moduleId) {
             const module = learnModules[moduleId];
             if (module) {
-                alert("📚 " + module.title + "\\n\\n" + module.content);
+                showPopup(module.content, '📚', module.title);
             }
         }
 
@@ -5169,6 +5171,7 @@ You are enough. Right now. As you are.`
                     }
                     updateXPDisplay();
                     updateBadgesDisplay();
+                    if (typeof updateProgressDashboard === 'function') updateProgressDashboard();
                 }
             } catch (err) {}
             // Load trust team from server
@@ -5235,6 +5238,16 @@ You are enough. Right now. As you are.`
         // Check auth on page load
         checkAuth();
     </script>
+
+    <!-- Custom Popup -->
+    <div class="buddy-popup-overlay" id="buddy-popup" onclick="if(event.target===this)closeBuddyPopup()">
+        <div class="buddy-popup">
+            <div class="buddy-popup-icon" id="buddy-popup-icon"></div>
+            <div class="buddy-popup-title" id="buddy-popup-title"></div>
+            <div class="buddy-popup-msg" id="buddy-popup-msg"></div>
+            <button class="buddy-popup-btn" id="buddy-popup-btn" onclick="closeBuddyPopup()">OK</button>
+        </div>
+    </div>
 
     <!-- Full-page Auth Screen -->
     <div class="auth-screen" id="auth-screen">
