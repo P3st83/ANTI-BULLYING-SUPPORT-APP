@@ -2439,23 +2439,8 @@ HTML_TEMPLATE = """
                     <div id="kindness-rec-timer" class="pod-timer" style="display: none;">0:00</div>
                 </div>
 
-                <!-- Buddy's Response to Kindness Entry -->
-                <div id="kindness-buddy-response" class="hidden" style="margin: 15px 0; padding: 18px; background: linear-gradient(135deg, #FFF8E1, #FFECB3); border-radius: 18px; border: 3px solid #FFB74D;">
-                    <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
-                        <video style="width: 30px; height: 30px; border-radius: 50%; border: 2px solid #FFB74D;" autoplay loop muted playsinline>
-                            <source src="/static/buddy/buddy-animated.webm" type="video/webm">
-                        </video>
-                        <strong style="color: #F57C00;">Buddy says:</strong>
-                    </div>
-                    <p id="kindness-buddy-text" style="font-weight: 700; color: #E65100; margin: 0; line-height: 1.4;"></p>
-                </div>
-
                 <!-- Entries list -->
-                <div class="journal-entries" id="kindness-entries">
-                    <div class="journal-entry">
-                        <strong>🌟 Example:</strong> I helped a classmate pick up their dropped books today!
-                    </div>
-                </div>
+                <div class="journal-entries" id="kindness-entries"></div>
                 <div id="kindness-success" class="success hidden">Kindness recorded! You're spreading joy! 💛</div>
             </div>
 
@@ -3318,6 +3303,32 @@ From: ${reporterName}`);
         let kindnessRecSeconds = 0;
         let kindnessEntries = JSON.parse(localStorage.getItem('kindnessEntries') || '[]');
 
+        function renderKindnessEntries() {
+            const entriesDiv = document.getElementById('kindness-entries');
+            entriesDiv.innerHTML = '';
+            if (kindnessEntries.length === 0) {
+                entriesDiv.innerHTML = '<div class="journal-entry"><strong>🌟 Example:</strong> I helped a classmate pick up their dropped books today!</div>';
+                return;
+            }
+            kindnessEntries.forEach(entry => {
+                const div = document.createElement('div');
+                div.className = 'journal-entry';
+                if (entry.type === 'voice') {
+                    div.innerHTML = `<div><strong>🎤 ${entry.date} at ${entry.time}</strong><div style="font-size:0.85em;color:#636E72;">Voice entry - ${entry.duration || '0:00'}</div></div>`;
+                } else {
+                    div.innerHTML = `<strong>💛 ${entry.date}</strong> - ${entry.text}`;
+                }
+                if (entry.buddyResponse) {
+                    const buddyDiv = document.createElement('div');
+                    buddyDiv.style.cssText = 'margin-top:10px;padding:12px;background:linear-gradient(135deg,#FFF8E1,#FFECB3);border-radius:14px;border:2px solid #FFB74D;';
+                    buddyDiv.innerHTML = '<span style="font-weight:700;color:#E65100;">🤖 Buddy says:</span> <span style="font-weight:600;color:#E65100;">' + entry.buddyResponse + '</span>';
+                    div.appendChild(buddyDiv);
+                }
+                entriesDiv.appendChild(div);
+            });
+        }
+        renderKindnessEntries();
+
         function toggleKindnessRecording() {
             const btn = document.getElementById('mic-btn');
             const status = document.getElementById('kindness-rec-status');
@@ -3338,7 +3349,7 @@ From: ${reporterName}`);
                             stream.getTracks().forEach(t => t.stop());
                             const audioBlob = new Blob(kindnessAudioChunks, { type: 'audio/webm' });
                             const audioUrl = URL.createObjectURL(audioBlob);
-                            addKindnessVoiceEntry(audioUrl);
+                            addKindnessVoiceEntry(audioUrl, audioBlob);
                         };
 
                         kindnessMediaRecorder.start();
@@ -3373,49 +3384,58 @@ From: ${reporterName}`);
             }
         }
 
-        async function addKindnessVoiceEntry(audioUrl) {
+        async function addKindnessVoiceEntry(audioUrl, audioBlob) {
             const date = new Date().toLocaleDateString();
             const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
             const duration = kindnessRecSeconds;
             const mins = Math.floor(duration / 60);
             const secs = duration % 60;
+            const durationStr = `${mins}:${secs.toString().padStart(2, '0')}`;
 
-            const entriesDiv = document.getElementById('kindness-entries');
-            const newEntry = document.createElement('div');
-            newEntry.className = 'journal-entry';
-            newEntry.innerHTML = `
-                <div style="display: flex; align-items: center; gap: 12px;">
-                    <button class="pod-play-btn" onclick="playKindnessAudio(this, '${audioUrl}')">▶️</button>
-                    <div style="flex: 1;">
-                        <strong>🎤 ${date} at ${time}</strong>
-                        <div style="font-size: 0.85em; color: #636E72;">Voice entry - ${mins}:${secs.toString().padStart(2, '0')}</div>
-                    </div>
-                </div>
-            `;
-            entriesDiv.insertBefore(newEntry, entriesDiv.firstChild);
+            const entry = { type: 'voice', date, time, duration: durationStr, buddyResponse: '' };
+            kindnessEntries.unshift(entry);
+            localStorage.setItem('kindnessEntries', JSON.stringify(kindnessEntries));
+            renderKindnessEntries();
 
             document.getElementById('kindness-success').classList.remove('hidden');
             setTimeout(() => document.getElementById('kindness-success').classList.add('hidden'), 3000);
 
-            // Get Buddy's AI response to the voice kindness entry
-            const buddyResponse = document.getElementById('kindness-buddy-response');
-            const buddyText = document.getElementById('kindness-buddy-text');
-            buddyText.textContent = '✨ Buddy is thinking...';
-            buddyResponse.classList.remove('hidden');
+            // Add temporary "listening" message to the first entry
+            const firstEntry = document.getElementById('kindness-entries').firstChild;
+            const buddyDiv = document.createElement('div');
+            buddyDiv.style.cssText = 'margin-top:10px;padding:12px;background:linear-gradient(135deg,#FFF8E1,#FFECB3);border-radius:14px;border:2px solid #FFB74D;';
+            buddyDiv.innerHTML = '<span style="font-weight:700;color:#E65100;">🤖 Buddy says:</span> <span class="buddy-reply" style="font-weight:600;color:#E65100;">✨ Buddy is listening...</span>';
+            firstEntry.appendChild(buddyDiv);
 
             try {
-                const response = await fetch('/api/kindness-response', {
+                const formData = new FormData();
+                formData.append('audio', audioBlob, 'kindness.webm');
+                const response = await fetch('/api/kindness-voice', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ entry: 'I recorded a voice message about something kind I did today.' })
+                    body: formData
                 });
                 const data = await response.json();
-                buddyText.textContent = data.response;
+                const buddyText = data.response || "That's really thoughtful of you!";
+                entry.buddyResponse = buddyText;
+                localStorage.setItem('kindnessEntries', JSON.stringify(kindnessEntries));
+                renderKindnessEntries();
+
+                // Play Buddy's voice reply
+                if (data.audio) {
+                    const audioBytes = atob(data.audio);
+                    const audioArray = new Uint8Array(audioBytes.length);
+                    for (let i = 0; i < audioBytes.length; i++) audioArray[i] = audioBytes.charCodeAt(i);
+                    const buddyAudioBlob = new Blob([audioArray], { type: 'audio/wav' });
+                    const buddyAudioUrl = URL.createObjectURL(buddyAudioBlob);
+                    const buddyAudio = new Audio(buddyAudioUrl);
+                    buddyAudio.play();
+                }
             } catch (error) {
-                buddyText.textContent = "That's really thoughtful of you. Little acts of kindness make the world brighter!";
+                entry.buddyResponse = "That's really thoughtful of you. Little acts of kindness make the world brighter!";
+                localStorage.setItem('kindnessEntries', JSON.stringify(kindnessEntries));
+                renderKindnessEntries();
             }
 
-            setTimeout(() => buddyResponse.classList.add('hidden'), 10000);
         }
 
         let currentKindnessAudio = null;
@@ -3453,29 +3473,27 @@ From: ${reporterName}`);
             }
 
             const entry = {
+                type: 'text',
                 text: text,
                 date: new Date().toLocaleDateString(),
-                time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+                time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
+                buddyResponse: ''
             };
 
             kindnessEntries.unshift(entry);
             localStorage.setItem('kindnessEntries', JSON.stringify(kindnessEntries));
-
-            const entriesDiv = document.getElementById('kindness-entries');
-            const newEntry = document.createElement('div');
-            newEntry.className = 'journal-entry';
-            newEntry.innerHTML = `<strong>💛 ${entry.date}</strong> - ${entry.text}`;
-            entriesDiv.insertBefore(newEntry, entriesDiv.firstChild);
+            renderKindnessEntries();
 
             input.value = '';
             document.getElementById('kindness-success').classList.remove('hidden');
             setTimeout(() => document.getElementById('kindness-success').classList.add('hidden'), 3000);
 
-            // Get Buddy's AI response to the kindness entry
-            const buddyResponse = document.getElementById('kindness-buddy-response');
-            const buddyText = document.getElementById('kindness-buddy-text');
-            buddyText.textContent = '✨ Buddy is thinking...';
-            buddyResponse.classList.remove('hidden');
+            // Add temporary "thinking" to first entry
+            const firstEntry = document.getElementById('kindness-entries').firstChild;
+            const buddyDiv = document.createElement('div');
+            buddyDiv.style.cssText = 'margin-top:10px;padding:12px;background:linear-gradient(135deg,#FFF8E1,#FFECB3);border-radius:14px;border:2px solid #FFB74D;';
+            buddyDiv.innerHTML = '<span style="font-weight:700;color:#E65100;">🤖 Buddy says:</span> <span class="buddy-reply" style="font-weight:600;color:#E65100;">✨ Buddy is thinking...</span>';
+            firstEntry.appendChild(buddyDiv);
 
             try {
                 const response = await fetch('/api/kindness-response', {
@@ -3484,13 +3502,15 @@ From: ${reporterName}`);
                     body: JSON.stringify({ entry: text })
                 });
                 const data = await response.json();
-                buddyText.textContent = data.response;
+                const buddyText = data.response || "That's really thoughtful of you!";
+                entry.buddyResponse = buddyText;
+                localStorage.setItem('kindnessEntries', JSON.stringify(kindnessEntries));
+                renderKindnessEntries();
             } catch (error) {
-                buddyText.textContent = "That's really thoughtful of you. Little acts of kindness make the world brighter!";
+                entry.buddyResponse = "That's really thoughtful of you. Little acts of kindness make the world brighter!";
+                localStorage.setItem('kindnessEntries', JSON.stringify(kindnessEntries));
+                renderKindnessEntries();
             }
-
-            // Hide the response after 10 seconds
-            setTimeout(() => buddyResponse.classList.add('hidden'), 10000);
         }
 
         // ============ WHAT SHOULD I DO? SCENARIOS ============
@@ -5391,6 +5411,83 @@ def submit_report():
         db.session.add(report)
         db.session.commit()
     return jsonify({'status': 'success', 'message': 'Report submitted'})
+
+@app.route('/api/kindness-voice', methods=['POST'])
+def kindness_voice():
+    """Listen to a voice kindness entry with GPT-4o and respond."""
+    import base64
+
+    audio_file = request.files.get('audio')
+    if not audio_file:
+        return jsonify({'response': 'I couldn\'t hear your message. Try again!'}), 400
+
+    import subprocess, tempfile
+
+    audio_bytes = audio_file.read()
+
+    # Convert webm to wav using ffmpeg (GPT-4o only accepts wav/mp3)
+    with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as tmp_in:
+        tmp_in.write(audio_bytes)
+        tmp_in_path = tmp_in.name
+    tmp_out_path = tmp_in_path.replace('.webm', '.wav')
+
+    try:
+        subprocess.run(['ffmpeg', '-y', '-i', tmp_in_path, '-ar', '16000', '-ac', '1', tmp_out_path],
+                       capture_output=True, timeout=10)
+        with open(tmp_out_path, 'rb') as f:
+            wav_bytes = f.read()
+    except Exception as e:
+        print(f"ffmpeg conversion error: {e}")
+        wav_bytes = audio_bytes  # fallback: try raw
+    finally:
+        import os as _os
+        _os.unlink(tmp_in_path)
+        if _os.path.exists(tmp_out_path):
+            _os.unlink(tmp_out_path)
+
+    audio_b64 = base64.b64encode(wav_bytes).decode('utf-8')
+
+    kindness_prompt = """You are Buddy, a warm and curious friend for children aged 7-13. A child just sent you a voice message about their day or something kind they did.
+
+Listen carefully to what they actually said and respond like a real friend would:
+- React specifically to what THEY told you (never give a generic response)
+- Ask a follow-up question to keep the conversation going
+- Be genuinely curious about their story - ask for details
+- Match their energy - if they're excited, be excited back
+- Use simple, natural language like a friendly older sibling would
+- 2-3 sentences max
+
+NEVER give generic praise like "That's wonderful!" or "Good job!" without referencing what they specifically said."""
+
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4o-audio-preview",
+            modalities=["text", "audio"],
+            audio={"voice": "coral", "format": "wav"},
+            messages=[
+                {"role": "system", "content": kindness_prompt},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "Listen to my kindness journal voice entry and respond to what I said:"},
+                    {"type": "input_audio", "input_audio": {"data": audio_b64, "format": "wav"}}
+                ]}
+            ],
+            max_tokens=1024,
+            temperature=0.7
+        )
+        text_response = completion.choices[0].message.audio.transcript
+        audio_response = completion.choices[0].message.audio.data
+        return jsonify({'response': text_response, 'audio': audio_response})
+    except Exception as e:
+        import traceback
+        print(f"GPT-4o audio error: {e}")
+        traceback.print_exc()
+        fallbacks = [
+            "That probably made someone's day better. Small kindnesses matter.",
+            "You noticed a moment to be kind. That's what good friends do.",
+        ]
+        import random as rnd
+        return jsonify({'response': rnd.choice(fallbacks)})
+
 
 @app.route('/api/kindness-response', methods=['POST'])
 def kindness_response():
