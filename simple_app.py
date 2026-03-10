@@ -5463,7 +5463,7 @@ NEVER give generic praise like "That's wonderful!" or "Good job!" without refere
         completion = client.chat.completions.create(
             model="gpt-4o-audio-preview",
             modalities=["text", "audio"],
-            audio={"voice": "coral", "format": "wav"},
+            audio={"voice": "sage", "format": "wav"},
             messages=[
                 {"role": "system", "content": kindness_prompt},
                 {"role": "user", "content": [
