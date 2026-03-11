@@ -1937,6 +1937,25 @@ HTML_TEMPLATE = """
             background: white;
         }
         .auth-input:focus { border-color: #6C5CE7; }
+        .auth-pw-wrap {
+            position: relative;
+            margin-bottom: 12px;
+        }
+        .auth-pw-wrap .auth-input { margin-bottom: 0; padding-right: 44px; }
+        .auth-pw-eye {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 18px;
+            padding: 4px;
+            opacity: 0.5;
+            transition: opacity 0.2s;
+        }
+        .auth-pw-eye:hover { opacity: 1; }
         .auth-btn {
             width: 100%;
             padding: 14px;
@@ -5077,6 +5096,54 @@ You are enough. Right now. As you are.`
             document.getElementById('auth-screen').classList.add('hidden');
         }
 
+        function togglePwEye(btn) {
+            const input = btn.previousElementSibling;
+            if (input.type === 'password') {
+                input.type = 'text';
+                btn.textContent = '🙈';
+            } else {
+                input.type = 'password';
+                btn.textContent = '👁️';
+            }
+        }
+
+        function showChangePassword() {
+            document.getElementById('change-pw-modal').classList.add('active');
+        }
+        function hideChangePassword() {
+            document.getElementById('change-pw-modal').classList.remove('active');
+            document.getElementById('cp-current').value = '';
+            document.getElementById('cp-new').value = '';
+            document.getElementById('cp-confirm').value = '';
+            document.getElementById('cp-error').textContent = '';
+        }
+        async function doChangePassword(e) {
+            e.preventDefault();
+            const current = document.getElementById('cp-current').value;
+            const newPw = document.getElementById('cp-new').value;
+            const confirm = document.getElementById('cp-confirm').value;
+            if (newPw !== confirm) {
+                document.getElementById('cp-error').textContent = 'New passwords do not match!';
+                return;
+            }
+            try {
+                const res = await fetch('/api/auth/change-password', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({current_password: current, new_password: newPw})
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    document.getElementById('cp-error').textContent = data.error || 'Failed to change password';
+                    return;
+                }
+                hideChangePassword();
+                showPopup('Your password has been changed!', '🔒', 'Password Updated', 'success');
+            } catch (err) {
+                document.getElementById('cp-error').textContent = 'Connection error. Try again.';
+            }
+        }
+
         function switchAuthTab(tab) {
             document.getElementById('tab-login').classList.toggle('active', tab === 'login');
             document.getElementById('tab-register').classList.toggle('active', tab === 'register');
@@ -5154,6 +5221,7 @@ You are enough. Right now. As you are.`
             if (loggedIn && currentUserData) {
                 authArea.innerHTML = '<div class="header-user-info">' +
                     '<span>👋 ' + currentUserData.username + '</span>' +
+                    '<button class="header-logout-btn" onclick="showChangePassword()">🔒 Password</button>' +
                     '<button class="header-logout-btn" onclick="doLogout()">Log Out</button>' +
                     '</div>';
             } else {
@@ -5284,16 +5352,49 @@ You are enough. Right now. As you are.`
             <div class="auth-error" id="auth-error"></div>
             <form class="auth-form active" id="form-login" onsubmit="doLogin(event)">
                 <input class="auth-input" type="text" id="login-username" placeholder="Username or email" required>
-                <input class="auth-input" type="password" id="login-password" placeholder="Password" required>
+                <div class="auth-pw-wrap">
+                    <input class="auth-input" type="password" id="login-password" placeholder="Password" required>
+                    <button type="button" class="auth-pw-eye" onclick="togglePwEye(this)">👁️</button>
+                </div>
                 <button class="auth-btn" type="submit">Log In</button>
             </form>
             <form class="auth-form" id="form-register" onsubmit="doRegister(event)">
                 <input class="auth-input" type="text" id="reg-username" placeholder="Choose a username" required>
                 <input class="auth-input" type="email" id="reg-email" placeholder="Email address" required>
-                <input class="auth-input" type="password" id="reg-password" placeholder="Password (6+ characters)" required minlength="6">
-                <input class="auth-input" type="password" id="reg-password2" placeholder="Confirm password" required>
+                <div class="auth-pw-wrap">
+                    <input class="auth-input" type="password" id="reg-password" placeholder="Password (6+ characters)" required minlength="6">
+                    <button type="button" class="auth-pw-eye" onclick="togglePwEye(this)">👁️</button>
+                </div>
+                <div class="auth-pw-wrap">
+                    <input class="auth-input" type="password" id="reg-password2" placeholder="Confirm password" required>
+                    <button type="button" class="auth-pw-eye" onclick="togglePwEye(this)">👁️</button>
+                </div>
                 <input class="auth-input" type="email" id="reg-parent-email" placeholder="Parent email (optional)">
                 <button class="auth-btn" type="submit">Create Account</button>
+            </form>
+        </div>
+    </div>
+    <!-- Change Password Modal -->
+    <div class="buddy-popup-overlay" id="change-pw-modal">
+        <div class="buddy-popup" style="max-width: 360px;">
+            <div style="font-size: 2em; text-align: center;">🔒</div>
+            <div style="font-size: 1.1em; font-weight: 800; text-align: center; margin: 8px 0;">Change Password</div>
+            <div class="auth-error" id="cp-error"></div>
+            <form onsubmit="doChangePassword(event)">
+                <div class="auth-pw-wrap">
+                    <input class="auth-input" type="password" id="cp-current" placeholder="Current password" required>
+                    <button type="button" class="auth-pw-eye" onclick="togglePwEye(this)">👁️</button>
+                </div>
+                <div class="auth-pw-wrap">
+                    <input class="auth-input" type="password" id="cp-new" placeholder="New password (6+ characters)" required minlength="6">
+                    <button type="button" class="auth-pw-eye" onclick="togglePwEye(this)">👁️</button>
+                </div>
+                <div class="auth-pw-wrap">
+                    <input class="auth-input" type="password" id="cp-confirm" placeholder="Confirm new password" required>
+                    <button type="button" class="auth-pw-eye" onclick="togglePwEye(this)">👁️</button>
+                </div>
+                <button class="auth-btn" type="submit" style="margin-top: 8px;">Change Password</button>
+                <button class="auth-btn" type="button" onclick="hideChangePassword()" style="margin-top: 8px; background: linear-gradient(135deg, #B2BEC3, #95A5A6);">Cancel</button>
             </form>
         </div>
     </div>
@@ -5352,6 +5453,20 @@ def me():
     if current_user.is_authenticated:
         return jsonify({'id': current_user.id, 'username': current_user.username, 'email': current_user.email})
     return jsonify({'error': 'Not logged in'}), 401
+
+@app.route('/api/auth/change-password', methods=['POST'])
+@login_required
+def change_password():
+    data = request.json
+    current_pw = data.get('current_password', '')
+    new_pw = data.get('new_password', '')
+    if not check_password_hash(current_user.password_hash, current_pw):
+        return jsonify({'error': 'Current password is wrong'}), 400
+    if len(new_pw) < 6:
+        return jsonify({'error': 'New password must be at least 6 characters'}), 400
+    current_user.password_hash = generate_password_hash(new_pw)
+    db.session.commit()
+    return jsonify({'status': 'success'})
 
 @app.route('/')
 def home():
