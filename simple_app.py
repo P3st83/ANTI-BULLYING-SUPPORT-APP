@@ -3246,22 +3246,17 @@ HTML_TEMPLATE = """
             });
 
             if (emailAddresses.length > 0) {
-                const subject = encodeURIComponent('I Need to Tell You Something Important');
                 const reporterName = anonymous ? 'Someone who trusts you' : 'A student';
-                const body = encodeURIComponent(`Hi ${emailNames.join(', ')},
-
-I need to tell you about something that happened.
-
-What happened: ${title}
-
-Details: ${description}
-
-Where it happened: ${location}
-
-I trust you and I need your help with this situation.
-
-From: ${reporterName}`);
-                window.location.href = `mailto:${emailAddresses.join(',')}?subject=${subject}&body=${body}`;
+                const subject = 'I Need to Tell You Something Important';
+                for (let i = 0; i < emailAddresses.length; i++) {
+                    const body = `Hi ${emailNames[i]},\n\nI need to tell you about something that happened.\n\nWhat happened: ${title}\n\nDetails: ${description}\n\nWhere it happened: ${location}\n\nI trust you and I need your help with this situation.\n\nFrom: ${reporterName}`;
+                    fetch('/api/send-alert', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({email: emailAddresses[i], subject, body})
+                    }).catch(() => {});
+                }
+                showPopup(`Your report has been sent to ${emailNames.join(', ')}. They will get your message soon.`, '📧', 'Report Sent', 'success');
             }
 
             if (noEmailNames.length > 0) {
